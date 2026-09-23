@@ -240,6 +240,51 @@ install_npm_global_if_missing() {
   npm install -g "${pkg_name}"
 }
 
+ensure_jdtls() {
+  if command -v jdtls >/dev/null 2>&1; then
+    log "Eclipse JDT Language Server already installed"
+    return
+  fi
+
+  log "Installing Eclipse JDT Language Server"
+  case "${PKG_MANAGER}" in
+    apt)
+      install_system_pkg "eclipse-jdtls" || install_system_pkg "jdtls" || true
+      ;;
+    dnf|yum)
+      install_system_pkg "java-21-openjdk-headless" || true
+      ;;
+    pacman)
+      install_system_pkg "jdtls" || true
+      ;;
+    brew)
+      brew install jdtls || true
+      ;;
+  esac
+
+  if ! command -v jdtls >/dev/null 2>&1; then
+    install_npm_global_if_missing "jdtls" "@vscjava/java-language-server"
+  fi
+}
+
+install_skill_if_missing() {
+  local skill_ref="$1"
+  local match_pattern="$2"
+
+  if ! command -v npx >/dev/null 2>&1; then
+    warn "npx not found; skipping skill installation for ${skill_ref}."
+    return
+  fi
+
+  if npx --yes skills list 2>/dev/null | grep -Eiq "${match_pattern}"; then
+    log "Skill already installed: ${skill_ref}"
+    return
+  fi
+
+  log "Installing skill: ${skill_ref}"
+  npx --yes skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
+}
+
 ensure_tools() {
   # Spring Boot CLI
   if command -v spring >/dev/null 2>&1; then
@@ -263,6 +308,7 @@ ensure_tools() {
   install_npm_global_if_missing "typescript-language-server" "typescript-language-server"
   install_npm_global_if_missing "bash-language-server" "bash-language-server"
   install_npm_global_if_missing "pyright-langserver" "pyright"
+  ensure_jdtls
 
   # Codex / Claude / Copilot CLIs
   install_npm_global_if_missing "codex" "@openai/codex"
@@ -287,6 +333,11 @@ ensure_tools() {
   else
     warn "JEV not installed. Set JEV_INSTALL_URL to enable automatic installation."
   fi
+
+  # Requested skills/plugins
+  install_skill_if_missing "superpowers" "superpowers"
+  install_skill_if_missing "ponytail" "ponytail"
+  install_skill_if_missing "https://uizze.sh/" "uizze|ui[[:space:]-]*taste"
 }
 
 validate_core_tools() {
@@ -304,7 +355,7 @@ validate_core_tools() {
   fi
 
   # Best-effort optional validations
-  for maybe in codex claude typescript-language-server bash-language-server pyright-langserver; do
+  for maybe in codex claude typescript-language-server bash-language-server pyright-langserver jdtls; do
     if command -v "${maybe}" >/dev/null 2>&1; then
       log "Validated: ${maybe}"
     else

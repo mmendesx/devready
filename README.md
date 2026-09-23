@@ -12,8 +12,9 @@ All-in-one script to install dependencies required for a development environment
 - Codex CLI
 - Claude CLI
 - Copilot (GitHub CLI extension)
-- LSPs (`typescript-language-server`, `bash-language-server`, `pyright`)
+- LSPs (`typescript-language-server`, `bash-language-server`, `pyright`, Eclipse JDT Language Server)
 - JEV (Laya) via `JEV_INSTALL_URL` hook
+- Plugins/skills: `superpowers`, `ponytail`, and `UI taste` (`https://uizze.sh/`)
 - Docker
 
 ## Usage
