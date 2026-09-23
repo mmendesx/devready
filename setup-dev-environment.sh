@@ -5,6 +5,9 @@ set -euo pipefail
 JAVA_VERSION="${JAVA_VERSION:-25}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.1}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"
+LAYA_REPO_URL="${LAYA_REPO_URL:-https://github.com/NandhaKishorM/laya.git}"
+LAYA_VENV_DIR="${LAYA_VENV_DIR:-$HOME/.laya-jev/.venv}"
+LAYA_CONFIG_DIR="${LAYA_CONFIG_DIR:-$HOME/.config/laya}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -285,6 +288,51 @@ install_skill_if_missing() {
   npx --yes skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
 }
 
+ensure_laya_jev_middleware() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 not found; skipping Laya JEV middleware setup."
+    return
+  fi
+
+  local laya_bin_dir
+  laya_bin_dir="$(dirname "${LAYA_VENV_DIR}")/bin"
+  mkdir -p "${laya_bin_dir}" "${LAYA_CONFIG_DIR}"
+
+  if [[ ! -x "${LAYA_VENV_DIR}/bin/python" ]]; then
+    log "Creating virtual environment for Laya middleware: ${LAYA_VENV_DIR}"
+    python3 -m venv "${LAYA_VENV_DIR}"
+  fi
+
+  log "Installing Laya JEV middleware from ${LAYA_REPO_URL}"
+  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade pip
+  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade "laya[mcp,serve]"
+  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade "git+${LAYA_REPO_URL}"
+
+  cat > "${laya_bin_dir}/laya-jev-mcp" <<EOF
+#!/usr/bin/env bash
+exec "${LAYA_VENV_DIR}/bin/laya-mcp-server" "\$@"
+EOF
+  chmod +x "${laya_bin_dir}/laya-jev-mcp"
+
+  cat > "${laya_bin_dir}/laya-jev-serve" <<EOF
+#!/usr/bin/env bash
+exec "${LAYA_VENV_DIR}/bin/laya-serve" "\$@"
+EOF
+  chmod +x "${laya_bin_dir}/laya-jev-serve"
+
+  cat > "${LAYA_CONFIG_DIR}/mcp-server.json" <<EOF
+{
+  "name": "laya-jev",
+  "command": "${laya_bin_dir}/laya-jev-mcp",
+  "args": [],
+  "transport": "stdio"
+}
+EOF
+
+  log "Laya MCP server wrapper: ${laya_bin_dir}/laya-jev-mcp"
+  log "Laya MCP config template: ${LAYA_CONFIG_DIR}/mcp-server.json"
+}
+
 ensure_tools() {
   # Spring Boot CLI
   if command -v spring >/dev/null 2>&1; then
@@ -324,15 +372,8 @@ ensure_tools() {
     warn "GitHub CLI (gh) not found; cannot install gh-copilot extension automatically."
   fi
 
-  # JEV (Laya) middleware: no universal public installer, so support explicit URL hook.
-  if command -v jev >/dev/null 2>&1; then
-    log "JEV already available"
-  elif [[ -n "${JEV_INSTALL_URL:-}" ]]; then
-    log "Installing JEV from JEV_INSTALL_URL"
-    curl -fsSL "${JEV_INSTALL_URL}" | bash
-  else
-    warn "JEV not installed. Set JEV_INSTALL_URL to enable automatic installation."
-  fi
+  # Laya as JEV middleware (MCP/HTTP)
+  ensure_laya_jev_middleware
 
   # Requested skills/plugins
   install_skill_if_missing "superpowers" "superpowers"
@@ -362,6 +403,12 @@ validate_core_tools() {
       warn "Optional tool not installed: ${maybe}"
     fi
   done
+
+  if [[ -x "$(dirname "${LAYA_VENV_DIR}")/bin/laya-jev-mcp" ]]; then
+    log "Validated: laya-jev-mcp wrapper"
+  else
+    warn "Optional middleware wrapper not found: laya-jev-mcp"
+  fi
 }
 
 main() {

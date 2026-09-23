@@ -13,7 +13,7 @@ All-in-one script to install dependencies required for a development environment
 - Claude CLI
 - Copilot (GitHub CLI extension)
 - LSPs (`typescript-language-server`, `bash-language-server`, `pyright`, Eclipse JDT Language Server)
-- JEV (Laya) via `JEV_INSTALL_URL` hook
+- Laya JEV middleware from `https://github.com/NandhaKishorM/laya` (MCP + HTTP server wrappers)
 - Plugins/skills: `superpowers`, `ponytail`, and `UI taste` (`https://uizze.sh/`)
 - Docker
 
@@ -30,12 +30,22 @@ cd /home/runner/work/d-environment/d-environment
 JAVA_VERSION=25 PYTHON_VERSION=3.1 NODE_MAJOR_VERSION=22 ./setup-dev-environment.sh
 ```
 
-### JEV (Laya)
+### JEV (Laya) middleware for AI agents
 
-If you have an installer URL/script for JEV, run with:
+The setup script installs Laya from the open-source reference repository and configures middleware wrappers:
+
+- `~/.laya-jev/.venv` (virtual environment)
+- `~/.laya-jev/bin/laya-jev-mcp` (stdio MCP wrapper)
+- `~/.laya-jev/bin/laya-jev-serve` (HTTP middleware wrapper)
+- `~/.config/laya/mcp-server.json` (MCP server config template)
+
+To override defaults:
 
 ```bash
-JEV_INSTALL_URL="https://example.com/jev/install.sh" ./setup-dev-environment.sh
+LAYA_REPO_URL="https://github.com/NandhaKishorM/laya.git" \
+LAYA_VENV_DIR="$HOME/.laya-jev/.venv" \
+LAYA_CONFIG_DIR="$HOME/.config/laya" \
+./setup-dev-environment.sh
 ```
 
 ## Validations included
