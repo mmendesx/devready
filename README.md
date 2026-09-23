@@ -7,7 +7,7 @@ All-in-one script to install dependencies required for a development environment
 - Java (default target: 25, configurable with `JAVA_VERSION`)
 - Spring Boot CLI (when supported by package manager)
 - TypeScript
-- Python 3.x (default target: `3.12`, configurable with `PYTHON_VERSION`)
+- Python 3.x (default target: `3.1`, configurable with `PYTHON_VERSION`)
 - Angular CLI
 - Codex CLI
 - Claude CLI
@@ -26,7 +26,7 @@ cd /home/runner/work/d-environment/d-environment
 ### Optional overrides
 
 ```bash
-JAVA_VERSION=25 PYTHON_VERSION=3.12 NODE_MAJOR_VERSION=22 ./setup-dev-environment.sh
+JAVA_VERSION=25 PYTHON_VERSION=3.1 NODE_MAJOR_VERSION=22 ./setup-dev-environment.sh
 ```
 
 ### JEV (Laya)

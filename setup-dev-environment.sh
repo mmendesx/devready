@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Required versions (override with env vars if needed)
 JAVA_VERSION="${JAVA_VERSION:-25}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.1}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
