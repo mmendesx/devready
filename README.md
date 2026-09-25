@@ -56,12 +56,19 @@ The script installs:
 - Oh My Zsh (`~/.oh-my-zsh` by default)
 - `powerlevel10k` theme under `~/.oh-my-zsh/custom/themes/powerlevel10k`
 - `dracula` theme under `~/.oh-my-zsh/custom/themes/dracula`
+- Sets Zsh as default shell (via `chsh`) when possible
 
 Default `~/.zshrc` theme is set to `dracula/dracula`.  
 To override:
 
 ```bash
 OMZ_DIR="$HOME/.oh-my-zsh" OMZ_THEME="powerlevel10k/powerlevel10k" ./setup-dev-environment.sh
+```
+
+Disable default-shell change:
+
+```bash
+ZSH_SET_DEFAULT=false ./setup-dev-environment.sh
 ```
 
 ## Validations included

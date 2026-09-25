@@ -10,6 +10,7 @@ LAYA_VENV_DIR="${LAYA_VENV_DIR:-$HOME/.laya-jev/.venv}"
 LAYA_CONFIG_DIR="${LAYA_CONFIG_DIR:-$HOME/.config/laya}"
 OMZ_DIR="${OMZ_DIR:-$HOME/.oh-my-zsh}"
 OMZ_THEME="${OMZ_THEME:-dracula/dracula}"
+ZSH_SET_DEFAULT="${ZSH_SET_DEFAULT:-true}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -320,7 +321,7 @@ update_or_append_shell_var() {
 }
 
 ensure_omz_with_themes() {
-  local zsh_custom zshrc
+  local zsh_custom zshrc zsh_path current_shell
 
   if ! command -v zsh >/dev/null 2>&1; then
     log "Installing zsh"
@@ -364,6 +365,19 @@ ensure_omz_with_themes() {
 
   if ! grep -q 'source \$ZSH/oh-my-zsh.sh' "${zshrc}" 2>/dev/null; then
     printf '\nsource $ZSH/oh-my-zsh.sh\n' >> "${zshrc}"
+  fi
+
+  zsh_path="$(command -v zsh || true)"
+  current_shell="${SHELL:-}"
+  if [[ "${ZSH_SET_DEFAULT}" == "true" && -n "${zsh_path}" ]]; then
+    if [[ "${current_shell}" == "${zsh_path}" ]]; then
+      log "Zsh is already the default shell (${zsh_path})"
+    elif command -v chsh >/dev/null 2>&1; then
+      log "Setting Zsh as default shell for ${USER}"
+      chsh -s "${zsh_path}" "${USER}" || warn "Could not set default shell automatically. Run: chsh -s ${zsh_path} ${USER}"
+    else
+      warn "chsh command not found. Set shell manually: chsh -s ${zsh_path} ${USER}"
+    fi
   fi
 }
 
