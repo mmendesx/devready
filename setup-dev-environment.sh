@@ -8,6 +8,8 @@ NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"
 LAYA_REPO_URL="${LAYA_REPO_URL:-https://github.com/NandhaKishorM/laya.git}"
 LAYA_VENV_DIR="${LAYA_VENV_DIR:-$HOME/.laya-jev/.venv}"
 LAYA_CONFIG_DIR="${LAYA_CONFIG_DIR:-$HOME/.config/laya}"
+OMZ_DIR="${OMZ_DIR:-$HOME/.oh-my-zsh}"
+OMZ_THEME="${OMZ_THEME:-dracula/dracula}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -288,6 +290,83 @@ install_skill_if_missing() {
   npx --yes skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
 }
 
+update_or_append_shell_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp_file
+  tmp_file="$(mktemp /tmp/d-environment-zshrc.XXXXXX)"
+
+  if [[ -f "${file}" ]]; then
+    awk -v key="${key}" -v value="${value}" '
+      BEGIN { updated=0 }
+      $0 ~ "^" key "=" {
+        print key "=\"" value "\""
+        updated=1
+        next
+      }
+      { print }
+      END {
+        if (!updated) {
+          print key "=\"" value "\""
+        }
+      }
+    ' "${file}" > "${tmp_file}"
+  else
+    printf '%s="%s"\n' "${key}" "${value}" > "${tmp_file}"
+  fi
+
+  mv "${tmp_file}" "${file}"
+}
+
+ensure_omz_with_themes() {
+  local zsh_custom zshrc
+
+  if ! command -v zsh >/dev/null 2>&1; then
+    log "Installing zsh"
+    install_system_pkg zsh || {
+      warn "Failed to install zsh automatically."
+      return
+    }
+  fi
+
+  if [[ ! -d "${OMZ_DIR}" ]]; then
+    log "Installing Oh My Zsh"
+    RUNZSH=no CHSH=no KEEP_ZSHRC=yes ZSH="${OMZ_DIR}" \
+      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || {
+        warn "Failed to install Oh My Zsh."
+        return
+      }
+  else
+    log "Oh My Zsh already installed: ${OMZ_DIR}"
+  fi
+
+  zsh_custom="${ZSH_CUSTOM:-${OMZ_DIR}/custom}"
+  mkdir -p "${zsh_custom}/themes"
+
+  if [[ ! -d "${zsh_custom}/themes/powerlevel10k/.git" ]]; then
+    log "Installing powerlevel10k theme"
+    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${zsh_custom}/themes/powerlevel10k" || warn "Failed to install powerlevel10k."
+  else
+    log "powerlevel10k already installed"
+  fi
+
+  if [[ ! -d "${zsh_custom}/themes/dracula/.git" ]]; then
+    log "Installing Dracula theme"
+    git clone --depth=1 https://github.com/dracula/zsh.git "${zsh_custom}/themes/dracula" || warn "Failed to install Dracula theme."
+  else
+    log "Dracula theme already installed"
+  fi
+
+  zshrc="${HOME}/.zshrc"
+  update_or_append_shell_var "${zshrc}" "ZSH" "${OMZ_DIR}"
+  update_or_append_shell_var "${zshrc}" "ZSH_THEME" "${OMZ_THEME}"
+
+  if ! grep -q 'source \$ZSH/oh-my-zsh.sh' "${zshrc}" 2>/dev/null; then
+    printf '\nsource $ZSH/oh-my-zsh.sh\n' >> "${zshrc}"
+  fi
+}
+
 ensure_laya_jev_middleware() {
   if ! command -v python3 >/dev/null 2>&1; then
     warn "python3 not found; skipping Laya JEV middleware setup."
@@ -374,6 +453,7 @@ ensure_tools() {
 
   # Laya as JEV middleware (MCP/HTTP)
   ensure_laya_jev_middleware
+  ensure_omz_with_themes
 
   # Requested skills/plugins
   install_skill_if_missing "superpowers" "superpowers"
@@ -408,6 +488,12 @@ validate_core_tools() {
     log "Validated: laya-jev-mcp wrapper"
   else
     warn "Optional middleware wrapper not found: laya-jev-mcp"
+  fi
+
+  if [[ -d "${OMZ_DIR}" ]]; then
+    log "Validated: Oh My Zsh (${OMZ_DIR})"
+  else
+    warn "Optional shell setup not found: Oh My Zsh"
   fi
 }
 

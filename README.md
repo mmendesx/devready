@@ -15,6 +15,7 @@ All-in-one script to install dependencies required for a development environment
 - LSPs (`typescript-language-server`, `bash-language-server`, `pyright`, Eclipse JDT Language Server)
 - Laya JEV middleware from `https://github.com/NandhaKishorM/laya` (MCP + HTTP server wrappers)
 - Plugins/skills: `superpowers`, `ponytail`, and `UI taste` (`https://uizze.sh/`)
+- Oh My Zsh with `powerlevel10k` and `Dracula` theme (default: `dracula/dracula`)
 - Docker
 
 ## Usage
@@ -46,6 +47,21 @@ LAYA_REPO_URL="https://github.com/NandhaKishorM/laya.git" \
 LAYA_VENV_DIR="$HOME/.laya-jev/.venv" \
 LAYA_CONFIG_DIR="$HOME/.config/laya" \
 ./setup-dev-environment.sh
+```
+
+### Shell setup (OMZ + powerlevel10k + Dracula)
+
+The script installs:
+
+- Oh My Zsh (`~/.oh-my-zsh` by default)
+- `powerlevel10k` theme under `~/.oh-my-zsh/custom/themes/powerlevel10k`
+- `dracula` theme under `~/.oh-my-zsh/custom/themes/dracula`
+
+Default `~/.zshrc` theme is set to `dracula/dracula`.  
+To override:
+
+```bash
+OMZ_DIR="$HOME/.oh-my-zsh" OMZ_THEME="powerlevel10k/powerlevel10k" ./setup-dev-environment.sh
 ```
 
 ## Validations included
