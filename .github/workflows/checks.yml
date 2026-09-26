@@ -1,0 +1,47 @@
+name: Installer checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install ShellCheck
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          else
+            brew install shellcheck
+          fi
+      - name: Lint and smoke tests
+        run: |
+          shellcheck -x setup-dev-environment.sh lib/*.sh test-setup-dev-environment.sh
+          bash test-setup-dev-environment.sh
+          python3 tests/check-config.py
+      - name: Verify MCP protocol checks
+        run: |
+          python3 -m venv "$RUNNER_TEMP/mcp-check"
+          "$RUNNER_TEMP/mcp-check/bin/python" -m pip install 'mcp==2.2.0'
+          "$RUNNER_TEMP/mcp-check/bin/python" tests/check-mcp.py
+      - name: Preview supported profiles
+        run: |
+          for profile in minimal backend frontend ai desktop headless; do
+            bash setup-dev-environment.sh --dry-run --profile "$profile"
+          done
+      - name: Validate Compose profiles
+        if: runner.os == 'Linux'
+        env:
+          POSTGRES_PASSWORD: ci-configuration-validation-only
+        run: |
+          docker compose -f compose.dev.yaml --profile postgres config --quiet
+          docker compose -f compose.dev.yaml --profile redis config --quiet

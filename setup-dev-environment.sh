@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
+# Shell fragments must expand in the user's next shell, not during setup.
+# shellcheck disable=SC2016
 set -euo pipefail
 
-# Required versions (override with env vars if needed)
 JAVA_VERSION="${JAVA_VERSION:-25}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.1}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.13}"
 NODE_MAJOR_VERSION="${NODE_MAJOR_VERSION:-22}"
 LAYA_REPO_URL="${LAYA_REPO_URL:-https://github.com/NandhaKishorM/laya.git}"
 LAYA_VENV_DIR="${LAYA_VENV_DIR:-$HOME/.laya-jev/.venv}"
 LAYA_CONFIG_DIR="${LAYA_CONFIG_DIR:-$HOME/.config/laya}"
 OMZ_DIR="${OMZ_DIR:-$HOME/.oh-my-zsh}"
-OMZ_THEME="${OMZ_THEME:-dracula/dracula}"
+OMZ_THEME="${OMZ_THEME:-powerlevel10k/powerlevel10k}"
 ZSH_SET_DEFAULT="${ZSH_SET_DEFAULT:-true}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/d-environment"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/d-environment"
+LOCAL_BIN="${D_ENV_BIN_DIR:-$HOME/.local/bin}"
+export PATH="${LOCAL_BIN}:${XDG_DATA_HOME:-$HOME/.local/share}/mise/shims:${PATH}"
+
+source "${REPO_ROOT}/lib/options.sh"
 
 log() { printf '\n[INFO] %s\n' "$*"; }
 warn() { printf '\n[WARN] %s\n' "$*" >&2; }
@@ -24,7 +31,12 @@ require_sudo() {
       err "This script requires sudo for system package installation."
       exit 1
     fi
-    SUDO="sudo"
+    if [[ "${ASSUME_YES:-false}" == true ]]; then
+      sudo -n true || { err "Run sudo -v first, then retry --yes."; exit 1; }
+      SUDO="sudo -n"
+    else
+      SUDO="sudo"
+    fi
   else
     SUDO=""
   fi
@@ -78,7 +90,7 @@ run_pkg_update_once() {
       apt) ${SUDO} apt-get update ;;
       dnf) ${SUDO} dnf makecache ;;
       yum) ${SUDO} yum makecache ;;
-      pacman) ${SUDO} pacman -Sy ;;
+      pacman) ${SUDO} pacman -Syu --noconfirm ;;
     esac
   elif [[ "${OS}" == "Darwin" ]]; then
     brew update
@@ -108,7 +120,7 @@ install_system_pkg() {
 is_pkg_installed() {
   local package="$1"
   case "${PKG_MANAGER}" in
-    apt) dpkg -s "${package}" >/dev/null 2>&1 ;;
+    apt) dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -qx 'install ok installed' ;;
     dnf|yum) rpm -q "${package}" >/dev/null 2>&1 ;;
     pacman) pacman -Q "${package}" >/dev/null 2>&1 ;;
     brew) brew list --formula "${package}" >/dev/null 2>&1 ;;
@@ -127,118 +139,143 @@ ensure_cmd() {
   fi
 }
 
-ensure_java() {
-  if command -v java >/dev/null 2>&1 && java -version 2>&1 | grep -q "\"${JAVA_VERSION}"; then
-    log "Java ${JAVA_VERSION} already installed"
-    return
+append_shell_line() {
+  local file="$1" line="$2"
+  mkdir -p "$(dirname "${file}")"
+  if [[ -f "${file}" ]] && grep -Fqx "${line}" "${file}"; then return; fi
+  backup_file "${file}"
+  printf '\n%s\n' "${line}" >> "${file}"
+}
+
+backup_file() {
+  if [[ -f "$1" && ! -e "$1.d-environment.bak" ]]; then
+    cp -p "$1" "$1.d-environment.bak"
   fi
+}
 
-  log "Installing Java ${JAVA_VERSION}"
-  case "${PKG_MANAGER}" in
-    apt)
-      install_system_pkg "openjdk-${JAVA_VERSION}-jdk" || {
-        warn "openjdk-${JAVA_VERSION}-jdk not available via apt."
-      }
-      ;;
-    dnf|yum)
-      install_system_pkg "java-${JAVA_VERSION}-openjdk-devel" || {
-        warn "java-${JAVA_VERSION}-openjdk-devel not available via ${PKG_MANAGER}."
-      }
-      ;;
-    pacman)
-      install_system_pkg "jdk-openjdk" ;;
-    brew)
-      brew install "openjdk@${JAVA_VERSION}" || warn "openjdk@${JAVA_VERSION} not available in Homebrew." ;;
-  esac
+ensure_mise() {
+  mkdir -p "${LOCAL_BIN}"
+  if ! command -v mise >/dev/null 2>&1; then
+    curl -fsSL https://mise.run | MISE_INSTALL_PATH="${LOCAL_BIN}/mise" sh
+  fi
+  ensure_cmd mise "Install mise from https://mise.jdx.dev"
+  append_shell_line "${HOME}/.profile" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_shell_line "${HOME}/.bashrc" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_shell_line "${HOME}/.zshrc" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_shell_line "${HOME}/.bashrc" 'eval "$(mise activate bash)"'
+  append_shell_line "${HOME}/.zshrc" 'eval "$(mise activate zsh)"'
+}
 
-  if ! command -v java >/dev/null 2>&1; then
-    warn "Java ${JAVA_VERSION} could not be installed automatically on this system."
+ensure_java() {
+  ensure_mise
+  MISE_YES=1 mise use --global --pin "java@${JAVA_VERSION}"
+  export JAVA_HOME
+  JAVA_HOME="$(mise where "java@${JAVA_VERSION}")"
+  export PATH="${JAVA_HOME}/bin:${PATH}"
+  if [[ "${PKG_MANAGER}" == brew ]]; then
+    install_system_pkg springboot
   fi
 }
 
 ensure_python() {
-  if command -v python3 >/dev/null 2>&1 && python3 --version 2>&1 | grep -Eiq "Python 3\\.(1[0-9]|[2-9][0-9])"; then
-    log "Python 3.x already installed"
-    return
+  if ! command -v uv >/dev/null 2>&1; then
+    curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR="${LOCAL_BIN}" UV_NO_MODIFY_PATH=1 sh
   fi
-
-  log "Installing Python ${PYTHON_VERSION}"
-  case "${PKG_MANAGER}" in
-    apt)
-      install_system_pkg "python${PYTHON_VERSION}" || install_system_pkg "python3"
-      install_system_pkg "python3-venv" || true
-      install_system_pkg "python3-pip" || true
-      ;;
-    dnf|yum)
-      install_system_pkg "python${PYTHON_VERSION}" || install_system_pkg "python3"
-      install_system_pkg "python3-pip" || true
-      ;;
-    pacman)
-      install_system_pkg "python"
-      install_system_pkg "python-pip" || true
-      ;;
-    brew)
-      brew install "python@${PYTHON_VERSION}" || brew install python
-      ;;
-  esac
+  uv python install --default "${PYTHON_VERSION}"
+  local python_path exact_version
+  python_path="$(uv python find --managed-python "${PYTHON_VERSION}")"
+  exact_version="$("${python_path}" -c 'import platform; print(platform.python_version())')"
+  uv python pin --global "${exact_version}"
+  PATH="$(dirname "${python_path}"):${PATH}"
+  append_shell_line "${HOME}/.profile" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_shell_line "${HOME}/.bashrc" 'export PATH="$HOME/.local/bin:$PATH"'
+  append_shell_line "${HOME}/.zshrc" 'export PATH="$HOME/.local/bin:$PATH"'
 }
 
 ensure_node() {
-  if command -v node >/dev/null 2>&1; then
-    log "Node.js already installed"
-    return
-  fi
-
-  log "Installing Node.js"
-  case "${PKG_MANAGER}" in
-    apt)
-      install_system_pkg "curl"
-      curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR_VERSION}.x | ${SUDO} -E bash -
-      install_system_pkg "nodejs"
-      ;;
-    dnf|yum|pacman)
-      install_system_pkg "nodejs"
-      ;;
-    brew)
-      brew install node
-      ;;
-  esac
+  ensure_mise
+  MISE_YES=1 mise use --global --pin "node@${NODE_MAJOR_VERSION}"
+  PATH="$(mise where "node@${NODE_MAJOR_VERSION}")/bin:${PATH}"
 }
 
 ensure_pnpm() {
   export PNPM_HOME="${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
   export PATH="${PNPM_HOME}/bin:${PNPM_HOME}:${PATH}"
-
   if ! command -v pnpm >/dev/null 2>&1; then
-    log "Installing pnpm"
     curl -fsSL https://get.pnpm.io/install.sh | env SHELL="${SHELL:-/bin/bash}" sh -
   fi
-
   ensure_cmd pnpm "Install pnpm from https://pnpm.io/installation"
   SHELL="${SHELL:-/bin/bash}" pnpm setup
+  if command -v zsh >/dev/null 2>&1; then SHELL="$(command -v zsh)" pnpm setup; fi
+}
+
+ensure_build_tools() {
+  local package
+  case "${PKG_MANAGER}" in
+    apt) install_system_pkg build-essential; install_system_pkg pkg-config; install_system_pkg libssl-dev; install_system_pkg libffi-dev ;;
+    dnf|yum) for package in gcc gcc-c++ make pkgconf-pkg-config openssl-devel libffi-devel; do install_system_pkg "${package}"; done ;;
+    pacman) install_system_pkg base-devel; install_system_pkg openssl; install_system_pkg libffi ;;
+    brew)
+      if ! xcode-select -p >/dev/null 2>&1; then
+        err "Install Xcode Command Line Tools with xcode-select --install, then rerun setup."
+        return 1
+      fi
+      install_system_pkg pkg-config
+      ;;
+  esac
+}
+
+ensure_terminal_tools() {
+  local package
+  for package in ripgrep fzf jq tmux shellcheck; do install_system_pkg "${package}"; done
+  if [[ "${PKG_MANAGER}" == apt ]]; then
+    install_system_pkg fd-find
+    mkdir -p "${LOCAL_BIN}"
+    if ! command -v fd >/dev/null 2>&1; then ln -s "$(command -v fdfind)" "${LOCAL_BIN}/fd"; fi
+  else
+    install_system_pkg fd
+  fi
 }
 
 ensure_docker() {
-  if command -v docker >/dev/null 2>&1; then
-    log "Docker already installed"
-    return
+  if [[ "${PKG_MANAGER}" == brew ]]; then
+    if [[ "${HEADLESS}" == true ]]; then
+      install_system_pkg docker
+      warn "Headless macOS needs a Docker context connected to an existing engine."
+    elif ! command -v docker >/dev/null 2>&1; then
+      brew install --cask docker-desktop
+    fi
+    local plugin
+    for plugin in compose buildx; do
+      if ! docker "${plugin}" version >/dev/null 2>&1; then
+        install_system_pkg "docker-${plugin}"
+        if ! docker "${plugin}" version >/dev/null 2>&1; then
+          mkdir -p "${HOME}/.docker/cli-plugins"
+          ln -s "$(brew --prefix)/opt/docker-${plugin}/bin/docker-${plugin}" "${HOME}/.docker/cli-plugins/docker-${plugin}"
+        fi
+      fi
+    done
+  elif [[ "${PKG_MANAGER}" == pacman ]]; then
+    install_system_pkg docker
+    install_system_pkg docker-compose
+    install_system_pkg docker-buildx
+  else
+    if ! command -v docker >/dev/null 2>&1; then
+      curl -fsSL https://get.docker.com | ${SUDO} sh
+    fi
+    if ! docker compose version >/dev/null 2>&1; then
+      install_system_pkg docker-compose-plugin || install_system_pkg docker-compose-v2
+    fi
+    if ! docker buildx version >/dev/null 2>&1; then
+      install_system_pkg docker-buildx-plugin || install_system_pkg docker-buildx
+    fi
   fi
-
-  log "Installing Docker"
-  case "${PKG_MANAGER}" in
-    apt)
-      install_system_pkg "docker.io"
-      ;;
-    dnf|yum)
-      install_system_pkg "docker"
-      ;;
-    pacman)
-      install_system_pkg "docker"
-      ;;
-    brew)
-      brew install --cask docker
-      ;;
-  esac
+  ensure_cmd docker "Install Docker Engine or Docker Desktop"
+  docker compose version
+  docker buildx version
+  if [[ "${OS}" == Linux ]] && command -v systemctl >/dev/null 2>&1; then
+    ${SUDO} systemctl enable --now docker
+  fi
 }
 
 install_pnpm_global_if_missing() {
@@ -255,48 +292,41 @@ install_pnpm_global_if_missing() {
 }
 
 ensure_jdtls() {
-  if command -v jdtls >/dev/null 2>&1; then
-    log "Eclipse JDT Language Server already installed"
+  if command -v jdtls >/dev/null 2>&1; then return; fi
+  if [[ "${PKG_MANAGER}" == brew ]]; then
+    install_system_pkg jdtls
     return
   fi
-
-  log "Installing Eclipse JDT Language Server"
-  case "${PKG_MANAGER}" in
-    apt)
-      install_system_pkg "eclipse-jdtls" || install_system_pkg "jdtls" || true
-      ;;
-    dnf|yum)
-      install_system_pkg "java-21-openjdk-headless" || true
-      ;;
-    pacman)
-      install_system_pkg "jdtls" || true
-      ;;
-    brew)
-      brew install jdtls || true
-      ;;
-  esac
-
-  if ! command -v jdtls >/dev/null 2>&1; then
-    install_pnpm_global_if_missing "jdtls" "@vscjava/java-language-server"
+  local archive download_dir
+  download_dir="$(mktemp -d)"
+  archive="$(curl -fsSL https://download.eclipse.org/jdtls/snapshots/latest.txt)"
+  if [[ ! "${archive}" =~ ^jdt-language-server-[a-zA-Z0-9.-]+\.tar\.gz$ ]]; then
+    rm -rf "${download_dir}"
+    err "Eclipse returned an invalid JDT LS archive name."
+    return 1
   fi
+  mkdir -p "${TOOLS_DIR}/jdtls" "${LOCAL_BIN}"
+  if ! curl -fsSL "https://download.eclipse.org/jdtls/snapshots/${archive}" -o "${download_dir}/jdtls.tar.gz" ||
+      ! tar -xzf "${download_dir}/jdtls.tar.gz" -C "${TOOLS_DIR}/jdtls"; then
+    rm -rf "${download_dir}"
+    return 1
+  fi
+  rm -rf "${download_dir}"
+  ln -s "${TOOLS_DIR}/jdtls/bin/jdtls" "${LOCAL_BIN}/jdtls"
 }
 
 install_skill_if_missing() {
-  local skill_ref="$1"
-  local match_pattern="$2"
-
-  if ! command -v pnpm >/dev/null 2>&1; then
-    warn "pnpm not found; skipping skill installation for ${skill_ref}."
-    return
-  fi
-
-  if pnpm dlx skills list 2>/dev/null | grep -Eiq "${match_pattern}"; then
-    log "Skill already installed: ${skill_ref}"
-    return
-  fi
-
-  log "Installing skill: ${skill_ref}"
-  pnpm dlx skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
+  local skill_ref="$1" match_pattern="$2" agent
+  local agents=()
+  if selected codex; then agents+=(codex); fi
+  if selected claude; then agents+=(claude-code); fi
+  if [[ "${EDITOR}" == cursor ]]; then agents+=(cursor); fi
+  if [[ "${EDITOR}" == code ]]; then agents+=(github-copilot); fi
+  for agent in "${agents[@]}"; do
+    if ! pnpm dlx skills list --global --agent "${agent}" 2>/dev/null | grep -Ei "${match_pattern}" >/dev/null; then
+      pnpm dlx skills add "${skill_ref}" --global --agent "${agent}" --skill '*' --yes
+    fi
+  done
 }
 
 update_or_append_shell_var() {
@@ -334,17 +364,17 @@ ensure_omz_with_themes() {
   if ! command -v zsh >/dev/null 2>&1; then
     log "Installing zsh"
     install_system_pkg zsh || {
-      warn "Failed to install zsh automatically."
-      return
+      err "Failed to install zsh automatically."
+      return 1
     }
   fi
 
   if [[ ! -d "${OMZ_DIR}" ]]; then
     log "Installing Oh My Zsh"
-    RUNZSH=no CHSH=no KEEP_ZSHRC=yes ZSH="${OMZ_DIR}" \
-      sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || {
-        warn "Failed to install Oh My Zsh."
-        return
+    curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh | \
+      env RUNZSH=no CHSH=no KEEP_ZSHRC=yes ZSH="${OMZ_DIR}" sh || {
+        err "Failed to install Oh My Zsh."
+        return 1
       }
   else
     log "Oh My Zsh already installed: ${OMZ_DIR}"
@@ -355,19 +385,14 @@ ensure_omz_with_themes() {
 
   if [[ ! -d "${zsh_custom}/themes/powerlevel10k/.git" ]]; then
     log "Installing powerlevel10k theme"
-    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${zsh_custom}/themes/powerlevel10k" || warn "Failed to install powerlevel10k."
+    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "${zsh_custom}/themes/powerlevel10k"
   else
     log "powerlevel10k already installed"
   fi
 
-  if [[ ! -d "${zsh_custom}/themes/dracula/.git" ]]; then
-    log "Installing Dracula theme"
-    git clone --depth=1 https://github.com/dracula/zsh.git "${zsh_custom}/themes/dracula" || warn "Failed to install Dracula theme."
-  else
-    log "Dracula theme already installed"
-  fi
 
   zshrc="${HOME}/.zshrc"
+  backup_file "${zshrc}"
   update_or_append_shell_var "${zshrc}" "ZSH" "${OMZ_DIR}"
   update_or_append_shell_var "${zshrc}" "ZSH_THEME" "${OMZ_THEME}"
 
@@ -376,14 +401,30 @@ ensure_omz_with_themes() {
   fi
 
   zsh_path="$(command -v zsh || true)"
-  SHELL="${zsh_path}" pnpm setup
-  current_shell="${SHELL:-}"
+  if command -v pnpm >/dev/null 2>&1; then SHELL="${zsh_path}" pnpm setup; fi
+  if [[ ! -f "${HOME}/.p10k.zsh" ]]; then
+    cp "${zsh_custom}/themes/powerlevel10k/config/p10k-lean.zsh" "${HOME}/.p10k.zsh"
+  fi
+  append_shell_line "${zshrc}" '[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh'
+  if [[ "${OS}" == Darwin ]]; then
+    current_shell="$(dscl . -read "/Users/${USER}" UserShell | awk '{print $2}')"
+  else
+    current_shell="$(getent passwd "${USER}" | cut -d: -f7)"
+  fi
   if [[ "${ZSH_SET_DEFAULT}" == "true" && -n "${zsh_path}" ]]; then
     if [[ "${current_shell}" == "${zsh_path}" ]]; then
       log "Zsh is already the default shell (${zsh_path})"
     elif command -v chsh >/dev/null 2>&1; then
       log "Setting Zsh as default shell for ${USER}"
-      chsh -s "${zsh_path}" "${USER}" || warn "Could not set default shell automatically. Run: chsh -s ${zsh_path} ${USER}"
+      if [[ "${ASSUME_YES}" == true ]]; then
+        if [[ "${EUID}" -eq 0 ]]; then
+          chsh -s "${zsh_path}" "${USER}"
+        else
+          sudo -n chsh -s "${zsh_path}" "${USER}" || warn "Run chsh -s ${zsh_path} after setup."
+        fi
+      else
+        chsh -s "${zsh_path}" "${USER}" || warn "Could not set default shell automatically. Run: chsh -s ${zsh_path} ${USER}"
+      fi
     else
       warn "chsh command not found. Set shell manually: chsh -s ${zsh_path} ${USER}"
     fi
@@ -400,11 +441,22 @@ ensure_jetbrains_mono_font() {
       brew install --cask font-jetbrains-mono-nerd-font
     fi
     if [[ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ]]; then
-      osascript \
-        -e 'tell application "Terminal"' \
-        -e 'set font name of default settings to "JetBrainsMonoNFM-Regular"' \
-        -e 'set font name of startup settings to "JetBrainsMonoNFM-Regular"' \
-        -e 'end tell' || warn "Select ${font_family} in Terminal settings manually."
+      mkdir -p "${CONFIG_DIR}"
+      if [[ ! -f "${CONFIG_DIR}/Dracula.terminal" ]]; then
+        curl -fsSL https://raw.githubusercontent.com/dracula/terminal-app/master/Dracula.terminal -o "${CONFIG_DIR}/Dracula.terminal"
+      fi
+      osascript - "${CONFIG_DIR}/Dracula.terminal" <<'APPLESCRIPT' || warn "Select Dracula and JetBrainsMono Nerd Font Mono in Terminal settings manually."
+on run argv
+  tell application "Terminal"
+    set previousSize to font size of default settings
+    if not (exists settings set "Dracula") then open (item 1 of argv)
+    set font name of settings set "Dracula" to "JetBrainsMonoNFM-Regular"
+    set font size of settings set "Dracula" to previousSize
+    set default settings to settings set "Dracula"
+    set startup settings to settings set "Dracula"
+  end tell
+end run
+APPLESCRIPT
     fi
   else
     install_system_pkg fontconfig
@@ -449,6 +501,11 @@ EOF
           if [[ -n "${profile}" ]]; then
             gsettings set "org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/" use-system-font true ||
               warn "Could not set the GNOME Terminal default profile font."
+            local profile_path="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/"
+            gsettings set "${profile_path}" use-theme-colors false
+            gsettings set "${profile_path}" background-color '#282a36'
+            gsettings set "${profile_path}" foreground-color '#f8f8f2'
+            gsettings set "${profile_path}" palette "['#21222c','#ff5555','#50fa7b','#f1fa8c','#bd93f9','#ff79c6','#8be9fd','#f8f8f2','#6272a4','#ff6e6e','#69ff94','#ffffa5','#d6acff','#ff92df','#a4ffff','#ffffff']"
           fi
         fi
       fi
@@ -461,163 +518,151 @@ EOF
 }
 
 ensure_laya_jev_middleware() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    warn "python3 not found; skipping Laya JEV middleware setup."
-    return
-  fi
-
   local laya_bin_dir
   laya_bin_dir="$(dirname "${LAYA_VENV_DIR}")/bin"
   mkdir -p "${laya_bin_dir}" "${LAYA_CONFIG_DIR}"
-
   if [[ ! -x "${LAYA_VENV_DIR}/bin/python" ]]; then
-    log "Creating virtual environment for Laya middleware: ${LAYA_VENV_DIR}"
-    python3 -m venv "${LAYA_VENV_DIR}"
+    uv venv --python "${PYTHON_VERSION}" "${LAYA_VENV_DIR}"
   fi
+  if [[ ! -x "${LAYA_VENV_DIR}/bin/laya-mcp-server" || ! -x "${LAYA_VENV_DIR}/bin/laya-serve" ]]; then
+    uv pip install --python "${LAYA_VENV_DIR}/bin/python" "laya[mcp,serve] @ git+${LAYA_REPO_URL}"
+  fi
+  printf '#!/usr/bin/env bash\nexport LAYA_PRELOAD="${LAYA_PRELOAD:-0}"\nexec %q "$@"\n' \
+    "${LAYA_VENV_DIR}/bin/laya-mcp-server" > "${laya_bin_dir}/laya-jev-mcp"
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' \
+    "${LAYA_VENV_DIR}/bin/laya-serve" > "${laya_bin_dir}/laya-jev-serve"
+  chmod +x "${laya_bin_dir}/laya-jev-mcp" "${laya_bin_dir}/laya-jev-serve"
+  "${LAYA_VENV_DIR}/bin/python" "${REPO_ROOT}/scripts/check-mcp.py" "${laya_bin_dir}/laya-jev-mcp"
 
-  log "Installing Laya JEV middleware from ${LAYA_REPO_URL}"
-  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade pip
-  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade "laya[mcp,serve]"
-  "${LAYA_VENV_DIR}/bin/python" -m pip install --upgrade "git+${LAYA_REPO_URL}"
-
-  cat > "${laya_bin_dir}/laya-jev-mcp" <<EOF
-#!/usr/bin/env bash
-exec "${LAYA_VENV_DIR}/bin/laya-mcp-server" "\$@"
-EOF
-  chmod +x "${laya_bin_dir}/laya-jev-mcp"
-
-  cat > "${laya_bin_dir}/laya-jev-serve" <<EOF
-#!/usr/bin/env bash
-exec "${LAYA_VENV_DIR}/bin/laya-serve" "\$@"
-EOF
-  chmod +x "${laya_bin_dir}/laya-jev-serve"
-
-  cat > "${LAYA_CONFIG_DIR}/mcp-server.json" <<EOF
-{
-  "name": "laya-jev",
-  "command": "${laya_bin_dir}/laya-jev-mcp",
-  "args": [],
-  "transport": "stdio"
-}
-EOF
-
-  log "Laya MCP server wrapper: ${laya_bin_dir}/laya-jev-mcp"
-  log "Laya MCP config template: ${LAYA_CONFIG_DIR}/mcp-server.json"
+  if selected codex; then
+    backup_file "${HOME}/.codex/config.toml"
+    codex mcp add laya-jev -- "${laya_bin_dir}/laya-jev-mcp"
+  fi
+  if selected claude; then
+    backup_file "${HOME}/.claude.json"
+    if claude mcp get laya-jev >/dev/null 2>&1; then
+      if claude mcp get laya-jev | grep -F "${laya_bin_dir}/laya-jev-mcp" >/dev/null; then
+        log "Laya already registered in Claude"
+      else
+        claude mcp remove --scope user laya-jev
+        claude mcp add --scope user laya-jev -- "${laya_bin_dir}/laya-jev-mcp"
+      fi
+    else
+      claude mcp add --scope user laya-jev -- "${laya_bin_dir}/laya-jev-mcp"
+    fi
+  fi
+  local target
+  for target in copilot cursor; do
+    if selected "${target}" || [[ "${EDITOR}" == "${target}" ]]; then
+      python3 "${REPO_ROOT}/scripts/configure-project.py" --mcp-target "${target}" \
+        --mcp-command "${laya_bin_dir}/laya-jev-mcp"
+    fi
+  done
+  if [[ "${EDITOR}" == code ]]; then
+    local server_json
+    server_json="$(python3 -c 'import json,sys; print(json.dumps({"name":"laya-jev","command":sys.argv[1],"env":{"LAYA_PRELOAD":"0"}}))' "${laya_bin_dir}/laya-jev-mcp")"
+    code --add-mcp "${server_json}"
+  fi
 }
 
 ensure_tools() {
-  # Spring Boot CLI
-  if command -v spring >/dev/null 2>&1; then
-    log "Spring Boot CLI already installed"
-  else
-    case "${PKG_MANAGER}" in
-      brew)
-        brew install springboot
-        ;;
-      *)
-        warn "Spring Boot CLI auto-install is only configured for Homebrew. Skipping CLI install."
-        ;;
-    esac
+  if [[ "${NODE_TOOLING}" == true ]]; then
+    install_pnpm_global_if_missing tsc typescript
+    install_pnpm_global_if_missing ng @angular/cli
+    NG_CLI_ANALYTICS=false ng config --global cli.packageManager pnpm
   fi
+  if selected lsp; then
+    install_pnpm_global_if_missing bash-language-server bash-language-server
+    if [[ "${NODE_TOOLING}" == true ]]; then install_pnpm_global_if_missing typescript-language-server typescript-language-server; fi
+    if selected python; then install_pnpm_global_if_missing pyright-langserver pyright; fi
+    if selected java; then ensure_jdtls; fi
+  fi
+  if selected codex; then install_pnpm_global_if_missing codex @openai/codex; fi
+  if selected claude && ! command -v claude >/dev/null 2>&1; then
+    curl -fsSL https://claude.ai/install.sh | bash
+  fi
+  if selected copilot && ! command -v copilot >/dev/null 2>&1; then
+    curl -fsSL https://gh.io/copilot-install | PREFIX="$(dirname "${LOCAL_BIN}")" bash
+  fi
+  if selected shell; then ensure_omz_with_themes; fi
+  if selected fonts; then ensure_jetbrains_mono_font; fi
+  if selected laya; then ensure_laya_jev_middleware; fi
+  if selected superpowers; then install_skill_if_missing https://github.com/obra/superpowers superpowers; fi
+  if selected ponytail; then install_skill_if_missing https://github.com/DietrichGebert/ponytail ponytail; fi
+  if selected ui-taste; then install_skill_if_missing https://uizze.sh/ 'uizze|ui[[:space:]-]*taste'; fi
+}
 
-  # TypeScript + Angular CLI
-  install_pnpm_global_if_missing "tsc" "typescript"
-  install_pnpm_global_if_missing "ng" "@angular/cli"
-
-  # LSPs
-  install_pnpm_global_if_missing "typescript-language-server" "typescript-language-server"
-  install_pnpm_global_if_missing "bash-language-server" "bash-language-server"
-  install_pnpm_global_if_missing "pyright-langserver" "pyright"
-  ensure_jdtls
-
-  # Codex / Claude / Copilot CLIs
-  install_pnpm_global_if_missing "codex" "@openai/codex"
-  install_pnpm_global_if_missing "claude" "@anthropic-ai/claude-code"
-
-  if command -v gh >/dev/null 2>&1; then
-    if gh extension list | grep -q 'github/gh-copilot'; then
-      log "GitHub Copilot GH extension already installed"
+configure_project() {
+  [[ -n "${PROJECT_DIR}" ]] || return 0
+  local python_path exact_version missing
+  local packages=()
+  if [[ -f "${PROJECT_DIR}/package.json" ]]; then
+    MISE_YES=1 mise use --path "${PROJECT_DIR}/mise.toml" --pin "node@${NODE_MAJOR_VERSION}"
+    missing="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); deps={**p.get("dependencies",{}), **p.get("devDependencies",{})}; print(" ".join(n for n in ("eslint","prettier","typescript-eslint","eslint-config-prettier") if n not in deps))' "${PROJECT_DIR}/package.json")"
+    if [[ -n "${missing}" ]]; then
+      read -r -a packages <<< "${missing}"
+      pnpm --dir "${PROJECT_DIR}" add --save-dev --save-exact "${packages[@]}"
     else
-      gh extension install github/gh-copilot || warn "Failed to install gh-copilot extension."
+      pnpm --dir "${PROJECT_DIR}" install
     fi
-  else
-    warn "GitHub CLI (gh) not found; cannot install gh-copilot extension automatically."
+    pnpm --dir "${PROJECT_DIR}" pkg set "packageManager=pnpm@$(pnpm --version)"
   fi
-
-  # Laya as JEV middleware (MCP/HTTP)
-  ensure_laya_jev_middleware
-  ensure_omz_with_themes
-  ensure_jetbrains_mono_font
-
-  # Requested skills/plugins
-  install_skill_if_missing "superpowers" "superpowers"
-  install_skill_if_missing "ponytail" "ponytail"
-  install_skill_if_missing "https://uizze.sh/" "uizze|ui[[:space:]-]*taste"
+  if [[ -f "${PROJECT_DIR}/pyproject.toml" ]]; then
+    python_path="$(uv python find --managed-python "${PYTHON_VERSION}")"
+    exact_version="$("${python_path}" -c 'import platform; print(platform.python_version())')"
+    uv python pin --project "${PROJECT_DIR}" "${exact_version}"
+    uv add --project "${PROJECT_DIR}" --dev ruff pytest
+  fi
+  if [[ -f "${PROJECT_DIR}/pom.xml" || -f "${PROJECT_DIR}/build.gradle" || -f "${PROJECT_DIR}/build.gradle.kts" ]]; then
+    MISE_YES=1 mise use --path "${PROJECT_DIR}/mise.toml" --pin "java@${JAVA_VERSION}"
+  fi
+  python3 "${REPO_ROOT}/scripts/configure-project.py" --project "${PROJECT_DIR}" \
+    --editor "${EDITOR}" --services "${SERVICES}"
 }
 
 validate_core_tools() {
-  log "Validating core toolchain"
-  ensure_cmd java "Install Java ${JAVA_VERSION}"
-  ensure_cmd python3 "Install Python ${PYTHON_VERSION}"
-  ensure_cmd node "Install Node.js"
-  ensure_cmd pnpm "Install pnpm"
-  ensure_cmd docker "Install Docker"
-  ensure_cmd tsc "Install TypeScript"
-  ensure_cmd ng "Install Angular CLI"
-
-  if ! command -v spring >/dev/null 2>&1; then
-    warn "spring CLI is not installed. Spring Boot projects can still run via Maven/Gradle wrappers."
-  fi
-
-  # Best-effort optional validations
-  for maybe in codex claude typescript-language-server bash-language-server pyright-langserver jdtls; do
-    if command -v "${maybe}" >/dev/null 2>&1; then
-      log "Validated: ${maybe}"
-    else
-      warn "Optional tool not installed: ${maybe}"
+  local component
+  for component in java python node docker codex claude copilot; do
+    if selected "${component}"; then
+      case "${component}" in
+        python) ensure_cmd uv "Rerun the Python component" ;;
+        *) ensure_cmd "${component}" "Rerun the ${component} component" ;;
+      esac
     fi
   done
-
-  if [[ -x "$(dirname "${LAYA_VENV_DIR}")/bin/laya-jev-mcp" ]]; then
-    log "Validated: laya-jev-mcp wrapper"
-  else
-    warn "Optional middleware wrapper not found: laya-jev-mcp"
-  fi
-
-  if [[ -d "${OMZ_DIR}" ]]; then
-    log "Validated: Oh My Zsh (${OMZ_DIR})"
-  else
-    warn "Optional shell setup not found: Oh My Zsh"
-  fi
+  if selected node; then ensure_cmd pnpm "Rerun the Node component"; fi
 }
 
 main() {
+  parse_args "$@" || return 1
+  if [[ "${MODE}" == help ]]; then usage; return; fi
+  show_selection
+  if [[ "${MODE}" == dry-run ]]; then return; fi
   detect_os
-  require_sudo
+  if [[ "${MODE}" == doctor ]]; then
+    source "${REPO_ROOT}/lib/doctor.sh"
+    run_doctor
+    return
+  fi
+  if [[ "${OS}" == Linux ]]; then require_sudo; else SUDO=""; fi
   detect_pkg_manager
+  if [[ "${EDITOR}" != none ]]; then ensure_cmd "${EDITOR}" "Install the selected editor and enable its command-line launcher"; fi
   run_pkg_update_once
-
-  # Core build/runtime dependencies
   install_system_pkg curl
   install_system_pkg git
-  install_system_pkg unzip || true
-  install_system_pkg ca-certificates || true
-
-  if [[ "${PKG_MANAGER}" != "brew" ]]; then
-    install_system_pkg gh || warn "GitHub CLI package not available in this distro"
-  else
-    brew install gh || true
-  fi
-
-  ensure_java
-  ensure_python
-  ensure_node
-  ensure_pnpm
-  ensure_docker
+  install_system_pkg unzip
+  install_system_pkg ca-certificates
+  install_system_pkg gh
+  if selected java || selected python || selected node; then ensure_build_tools; fi
+  if selected java; then ensure_java; fi
+  if selected python; then ensure_python; fi
+  if selected node; then ensure_node; ensure_pnpm; fi
+  if selected tools; then ensure_terminal_tools; fi
+  if selected docker; then ensure_docker; fi
   ensure_tools
+  configure_project
   validate_core_tools
-
-  log "Setup finished."
+  log "Setup finished. Run --doctor with the same selection to check authentication and services."
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
