@@ -184,8 +184,8 @@ ensure_python() {
 }
 
 ensure_node() {
-  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    log "Node.js and npm already installed"
+  if command -v node >/dev/null 2>&1; then
+    log "Node.js already installed"
     return
   fi
 
@@ -196,18 +196,26 @@ ensure_node() {
       curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR_VERSION}.x | ${SUDO} -E bash -
       install_system_pkg "nodejs"
       ;;
-    dnf|yum)
+    dnf|yum|pacman)
       install_system_pkg "nodejs"
-      install_system_pkg "npm"
-      ;;
-    pacman)
-      install_system_pkg "nodejs"
-      install_system_pkg "npm"
       ;;
     brew)
       brew install node
       ;;
   esac
+}
+
+ensure_pnpm() {
+  export PNPM_HOME="${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
+  export PATH="${PNPM_HOME}/bin:${PNPM_HOME}:${PATH}"
+
+  if ! command -v pnpm >/dev/null 2>&1; then
+    log "Installing pnpm"
+    curl -fsSL https://get.pnpm.io/install.sh | env SHELL="${SHELL:-/bin/bash}" sh -
+  fi
+
+  ensure_cmd pnpm "Install pnpm from https://pnpm.io/installation"
+  SHELL="${SHELL:-/bin/bash}" pnpm setup
 }
 
 ensure_docker() {
@@ -233,7 +241,7 @@ ensure_docker() {
   esac
 }
 
-install_npm_global_if_missing() {
+install_pnpm_global_if_missing() {
   local bin_name="$1"
   local pkg_name="$2"
 
@@ -242,8 +250,8 @@ install_npm_global_if_missing() {
     return
   fi
 
-  log "Installing npm package: ${pkg_name}"
-  npm install -g "${pkg_name}"
+  log "Installing pnpm package: ${pkg_name}"
+  pnpm add --global "${pkg_name}"
 }
 
 ensure_jdtls() {
@@ -269,7 +277,7 @@ ensure_jdtls() {
   esac
 
   if ! command -v jdtls >/dev/null 2>&1; then
-    install_npm_global_if_missing "jdtls" "@vscjava/java-language-server"
+    install_pnpm_global_if_missing "jdtls" "@vscjava/java-language-server"
   fi
 }
 
@@ -277,18 +285,18 @@ install_skill_if_missing() {
   local skill_ref="$1"
   local match_pattern="$2"
 
-  if ! command -v npx >/dev/null 2>&1; then
-    warn "npx not found; skipping skill installation for ${skill_ref}."
+  if ! command -v pnpm >/dev/null 2>&1; then
+    warn "pnpm not found; skipping skill installation for ${skill_ref}."
     return
   fi
 
-  if npx --yes skills list 2>/dev/null | grep -Eiq "${match_pattern}"; then
+  if pnpm dlx skills list 2>/dev/null | grep -Eiq "${match_pattern}"; then
     log "Skill already installed: ${skill_ref}"
     return
   fi
 
   log "Installing skill: ${skill_ref}"
-  npx --yes skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
+  pnpm dlx skills add "${skill_ref}" || warn "Failed to install skill: ${skill_ref}"
 }
 
 update_or_append_shell_var() {
@@ -368,6 +376,7 @@ ensure_omz_with_themes() {
   fi
 
   zsh_path="$(command -v zsh || true)"
+  SHELL="${zsh_path}" pnpm setup
   current_shell="${SHELL:-}"
   if [[ "${ZSH_SET_DEFAULT}" == "true" && -n "${zsh_path}" ]]; then
     if [[ "${current_shell}" == "${zsh_path}" ]]; then
@@ -378,6 +387,76 @@ ensure_omz_with_themes() {
     else
       warn "chsh command not found. Set shell manually: chsh -s ${zsh_path} ${USER}"
     fi
+  fi
+}
+
+ensure_jetbrains_mono_font() {
+  local font_family="JetBrainsMono Nerd Font Mono"
+  local font_dir font_config_dir archive schemas profile font_size
+
+  log "Installing and configuring ${font_family}"
+  if [[ "${OS}" == "Darwin" ]]; then
+    if ! brew list --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; then
+      brew install --cask font-jetbrains-mono-nerd-font
+    fi
+    if [[ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ]]; then
+      osascript \
+        -e 'tell application "Terminal"' \
+        -e 'set font name of default settings to "JetBrainsMonoNFM-Regular"' \
+        -e 'set font name of startup settings to "JetBrainsMonoNFM-Regular"' \
+        -e 'end tell' || warn "Select ${font_family} in Terminal settings manually."
+    fi
+  else
+    install_system_pkg fontconfig
+    font_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/JetBrainsMono"
+    mkdir -p "${font_dir}"
+    if [[ "$(fc-match -f '%{family[0]}' "${font_family}")" != "${font_family}" ]]; then
+      install_system_pkg unzip
+      archive="$(mktemp "${TMPDIR:-/tmp}/d-environment-font.XXXXXX")"
+      if ! curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/latest/download/JetBrainsMono.zip -o "${archive}" ||
+          ! unzip -oq "${archive}" 'JetBrainsMonoNerdFontMono-*.ttf' -d "${font_dir}"; then
+        rm -f "${archive}"
+        err "Could not install ${font_family}."
+        return 1
+      fi
+      rm -f "${archive}"
+    fi
+
+    font_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fontconfig/conf.d"
+    mkdir -p "${font_config_dir}"
+    cat > "${font_config_dir}/60-jetbrains-mono-nerd.conf" <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <alias binding="strong">
+    <family>monospace</family>
+    <prefer><family>${font_family}</family></prefer>
+  </alias>
+</fontconfig>
+EOF
+    fc-cache -f "${font_dir}"
+
+    if command -v gsettings >/dev/null 2>&1 && [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
+      schemas="$(gsettings list-schemas)"
+      if grep -qx 'org.gnome.desktop.interface' <<< "${schemas}"; then
+        font_size="$(gsettings get org.gnome.desktop.interface monospace-font-name)"
+        font_size="${font_size##* }"
+        gsettings set org.gnome.desktop.interface monospace-font-name "${font_family} ${font_size//\'/}" ||
+          warn "Could not set the GNOME monospace font."
+        if grep -qx 'org.gnome.Terminal.ProfilesList' <<< "${schemas}"; then
+          profile="$(gsettings get org.gnome.Terminal.ProfilesList default)"
+          profile="${profile//\'/}"
+          if [[ -n "${profile}" ]]; then
+            gsettings set "org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile}/" use-system-font true ||
+              warn "Could not set the GNOME Terminal default profile font."
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  if [[ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ]]; then
+    warn "SSH uses the client terminal's font; select ${font_family} on your local computer too."
   fi
 }
 
@@ -442,18 +521,18 @@ ensure_tools() {
   fi
 
   # TypeScript + Angular CLI
-  install_npm_global_if_missing "tsc" "typescript"
-  install_npm_global_if_missing "ng" "@angular/cli"
+  install_pnpm_global_if_missing "tsc" "typescript"
+  install_pnpm_global_if_missing "ng" "@angular/cli"
 
   # LSPs
-  install_npm_global_if_missing "typescript-language-server" "typescript-language-server"
-  install_npm_global_if_missing "bash-language-server" "bash-language-server"
-  install_npm_global_if_missing "pyright-langserver" "pyright"
+  install_pnpm_global_if_missing "typescript-language-server" "typescript-language-server"
+  install_pnpm_global_if_missing "bash-language-server" "bash-language-server"
+  install_pnpm_global_if_missing "pyright-langserver" "pyright"
   ensure_jdtls
 
   # Codex / Claude / Copilot CLIs
-  install_npm_global_if_missing "codex" "@openai/codex"
-  install_npm_global_if_missing "claude" "@anthropic-ai/claude-code"
+  install_pnpm_global_if_missing "codex" "@openai/codex"
+  install_pnpm_global_if_missing "claude" "@anthropic-ai/claude-code"
 
   if command -v gh >/dev/null 2>&1; then
     if gh extension list | grep -q 'github/gh-copilot'; then
@@ -468,6 +547,7 @@ ensure_tools() {
   # Laya as JEV middleware (MCP/HTTP)
   ensure_laya_jev_middleware
   ensure_omz_with_themes
+  ensure_jetbrains_mono_font
 
   # Requested skills/plugins
   install_skill_if_missing "superpowers" "superpowers"
@@ -480,7 +560,7 @@ validate_core_tools() {
   ensure_cmd java "Install Java ${JAVA_VERSION}"
   ensure_cmd python3 "Install Python ${PYTHON_VERSION}"
   ensure_cmd node "Install Node.js"
-  ensure_cmd npm "Install npm"
+  ensure_cmd pnpm "Install pnpm"
   ensure_cmd docker "Install Docker"
   ensure_cmd tsc "Install TypeScript"
   ensure_cmd ng "Install Angular CLI"
@@ -532,6 +612,7 @@ main() {
   ensure_java
   ensure_python
   ensure_node
+  ensure_pnpm
   ensure_docker
   ensure_tools
   validate_core_tools
@@ -539,4 +620,6 @@ main() {
   log "Setup finished."
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
