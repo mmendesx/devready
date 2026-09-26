@@ -57,6 +57,7 @@ run_doctor() {
   if selected claude; then doctor_check 'Claude authentication' 'Run claude auth login.' claude auth status; fi
   if selected tools; then
     for tool in rg fd fzf jq tmux shellcheck; do doctor_check "${tool} on PATH" 'Rerun the tools component.' command -v "${tool}"; done
+    doctor_check 'RTK (Rust Token Killer)' 'Rerun the tools component; check for an unrelated rtk executable on PATH.' rtk gain --help
   fi
   if selected lsp; then
     doctor_check 'Bash language server' 'Rerun the lsp component.' command -v bash-language-server

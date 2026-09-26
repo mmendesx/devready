@@ -43,7 +43,9 @@ bash setup-dev-environment.sh --profile backend --headless --yes
 
 Available components: `java`, `python`, `node`, `docker`, `tools`, `lsp`, `shell`, `fonts`, `codex`, `claude`, `copilot`, `laya`, `superpowers`, `ponytail`, `ui-taste`.
 
-Terminal utilities are ripgrep (`rg`), `fd`, `fzf`, `jq`, `tmux`, and ShellCheck. Language servers are Bash, TypeScript, Pyright, and Eclipse JDT LS, according to the selected languages. Language selections also install native build prerequisites. macOS Java setup includes the Spring Boot CLI.
+Terminal utilities are ripgrep (`rg`), `fd`, `fzf`, `jq`, `tmux`, ShellCheck, and [RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk). Language servers are Bash, TypeScript, Pyright, and Eclipse JDT LS, according to the selected languages. Language selections also install native build prerequisites. macOS Java setup includes the Spring Boot CLI.
+
+RTK is included in the `tools` component and every standard profile. Setup uses Homebrew on macOS and RTK's official installer on Linux, reuses an existing installation, and checks that the token-saving CLI is available. Use commands such as `rtk git status` and `rtk gain`; to enable Claude Code's automatic command rewriting, run `rtk init --global`.
 
 ## Runtime versions
 

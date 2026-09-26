@@ -154,6 +154,55 @@ append_shell_line "${test_dir}/shellrc" 'export TEST_SETTING=1'
 [[ "$(grep -c TEST_SETTING "${test_dir}/shellrc")" == 1 ]]
 grep -qx 'keep this line' "${test_dir}/shellrc.d-environment.bak"
 
+cat > "${test_dir}/rtk-stub" <<'EOF'
+#!/bin/sh
+case "$*" in
+  --version) printf 'rtk test\n' ;;
+  'gain --help') exit 0 ;;
+  *) exit 1 ;;
+esac
+EOF
+(
+  : > "${SETUP_TEST_LOG}"
+  PKG_MANAGER=dnf
+  append_shell_line() { record "shell $*"; }
+  curl() {
+    record "curl $*"
+    [[ "$2" == https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh ]] || return 1
+    cat <<'EOF'
+cp "$SETUP_TEST_DIR/rtk-stub" "$RTK_INSTALL_DIR/rtk"
+chmod +x "$RTK_INSTALL_DIR/rtk"
+EOF
+  }
+  ensure_terminal_tools
+  ensure_terminal_tools
+  [[ "$(grep -c '^curl .*rtk/master/install.sh$' "${SETUP_TEST_LOG}")" == 1 ]]
+  grep -Fq "export PATH=\"\$HOME/.local/bin:\$PATH\"" "${SETUP_TEST_LOG}"
+  rm "${LOCAL_BIN}/rtk"
+  hash -r
+  curl() { record failed-rtk-download; return 1; }
+  if ensure_rtk; then printf 'Failed RTK downloads must fail setup.\n' >&2; exit 1; fi
+  grep -qx failed-rtk-download "${SETUP_TEST_LOG}"
+  [[ ! -e "${LOCAL_BIN}/rtk" ]]
+)
+(
+  : > "${SETUP_TEST_LOG}"
+  PKG_MANAGER=brew
+  install_system_pkg() {
+    record "package $*"
+    if [[ "$1" == rtk ]]; then
+      cp "${test_dir}/rtk-stub" "${LOCAL_BIN}/rtk"
+      chmod +x "${LOCAL_BIN}/rtk"
+    fi
+  }
+  ensure_terminal_tools
+  ensure_terminal_tools
+  [[ "$(grep -c '^package rtk$' "${SETUP_TEST_LOG}")" == 1 ]]
+  rm "${LOCAL_BIN}/rtk"
+  rtk() { [[ "$*" == --version ]]; }
+  if ensure_rtk; then printf 'An unrelated rtk binary must fail validation.\n' >&2; exit 1; fi
+)
+
 source "${REPO_ROOT}/lib/doctor.sh"
 parse_args --doctor --components tools
 git() { :; }
@@ -164,11 +213,15 @@ fzf() { :; }
 jq() { :; }
 tmux() { :; }
 shellcheck() { :; }
+rtk() { [[ "$*" == --version || "${rtk_fails:-false}" == false ]]; }
 : > "${SETUP_TEST_LOG}"
 run_doctor
 [[ ! -s "${SETUP_TEST_LOG}" ]]
 auth_fails=true
 if run_doctor; then printf 'Doctor must fail for missing authentication.\n' >&2; exit 1; fi
+[[ "${DOCTOR_FAILURES}" == 1 ]]
+auth_fails=false rtk_fails=true
+if run_doctor; then printf 'Doctor must fail for an unusable RTK binary.\n' >&2; exit 1; fi
 [[ "${DOCTOR_FAILURES}" == 1 ]]
 version_matches 22 printf '22.20.0'
 if version_matches 22 printf '20.20.0'; then exit 1; fi
@@ -186,4 +239,4 @@ if version_matches 22 printf '20.20.0'; then exit 1; fi
   true
 )
 
-printf '\nProfile, pnpm, font, Docker plugins, repeat-run, and read-only doctor checks passed.\n'
+printf '\nProfile, pnpm, font, RTK, Docker plugins, repeat-run, and read-only doctor checks passed.\n'

@@ -225,6 +225,26 @@ ensure_build_tools() {
   esac
 }
 
+ensure_rtk() {
+  if ! command -v rtk >/dev/null 2>&1; then
+    if [[ "${PKG_MANAGER}" == brew ]]; then
+      install_system_pkg rtk || return 1
+    else
+      curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | RTK_INSTALL_DIR="${LOCAL_BIN}" sh || return 1
+    fi
+  fi
+  if ! rtk --version || ! rtk gain --help >/dev/null 2>&1; then
+    err "Expected RTK (Rust Token Killer, rtk-ai/rtk). Check the rtk executable on PATH."
+    return 1
+  fi
+  if [[ "${PKG_MANAGER}" != brew ]]; then
+    local file
+    for file in "${HOME}/.profile" "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+      append_shell_line "${file}" 'export PATH="$HOME/.local/bin:$PATH"'
+    done
+  fi
+}
+
 ensure_terminal_tools() {
   local package
   for package in ripgrep fzf jq tmux shellcheck; do install_system_pkg "${package}"; done
@@ -235,6 +255,7 @@ ensure_terminal_tools() {
   else
     install_system_pkg fd
   fi
+  ensure_rtk
 }
 
 ensure_docker() {
