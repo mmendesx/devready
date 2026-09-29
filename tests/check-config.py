@@ -29,6 +29,29 @@ with tempfile.TemporaryDirectory() as directory:
         launcher.chmod(0o755)
     os.environ["PATH"] = str(binary) + os.pathsep + os.environ["PATH"]
 
+    native = root / "native project"
+    native.mkdir()
+    go_module = "module example.com/app\n\ngo 1.27\n"
+    (native / "go.mod").write_text(go_module)
+    (native / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.16)\nproject(example C CXX)\n")
+    configure.configure_project(native, "code", "")
+    assert "golang.go" in json.loads((native / "development.code-workspace").read_text())["extensions"]["recommendations"]
+    configure.configure_project(native, "code", "", "go,c,cpp")
+    native_workspace = native / "development.code-workspace"
+    native_before = native_workspace.read_bytes()
+    native_data = json.loads(native_before)
+    assert {"golang.go", "llvm-vs-code-extensions.vscode-clangd", "ms-vscode.cmake-tools"} <= set(native_data["extensions"]["recommendations"])
+    assert native_data["settings"]["[go]"]["editor.defaultFormatter"] == "golang.go"
+    assert native_data["settings"]["[c]"]["editor.defaultFormatter"] == "llvm-vs-code-extensions.vscode-clangd"
+    assert native_data["settings"]["[cpp]"]["editor.defaultFormatter"] == "llvm-vs-code-extensions.vscode-clangd"
+    native_tasks = {task["label"]: task for task in native_data["tasks"]["tasks"]}
+    assert native_tasks["Go tests"]["args"] == ["test", "./..."]
+    assert native_tasks["Go vet"]["args"] == ["vet", "./..."]
+    assert native_tasks["CMake configure"]["args"] == ["-S", ".", "-B", "build", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]
+    configure.configure_project(native, "cursor", "", "go,c,cpp")
+    assert native_workspace.read_bytes() == native_before
+    assert (native / "go.mod").read_text() == go_module
+
     configure.configure_project(project, "code", "postgres,redis")
     workspace = project / "development.code-workspace"
     before = workspace.read_bytes()
@@ -39,10 +62,10 @@ with tempfile.TemporaryDirectory() as directory:
     assert data["tasks"]["tasks"][0]["command"] == "keep-me"
     assert {config["type"] for config in data["launch"]["configurations"]} == {"node", "java", "debugpy"}
     assert "Angular.ng-template" in data["extensions"]["recommendations"]
-    secret = project / ".env.d-environment"
+    secret = project / ".env.devready"
     assert stat.S_IMODE(secret.stat().st_mode) == 0o600
     secret_before = secret.read_bytes()
-    assert "/.env.d-environment" in (project / ".gitignore").read_text().splitlines()
+    assert "/.env.devready" in (project / ".gitignore").read_text().splitlines()
     assert "existing-rule" in (project / ".gitignore").read_text().splitlines()
     assert (project / "eslint.config.mjs").exists()
     (project / "eslint.config.mjs").write_text("custom configuration")
@@ -50,29 +73,51 @@ with tempfile.TemporaryDirectory() as directory:
     assert workspace.read_bytes() == before
     assert secret.read_bytes() == secret_before
     assert (project / "eslint.config.mjs").read_text() == "custom configuration"
-    assert (project / ".gitignore").read_text().count("/.env.d-environment") == 1
+    assert (project / ".gitignore").read_text().count("/.env.devready") == 1
 
-    path = root / ".copilot/mcp-config.json"
+    legacy_project = root / 'legacy project'
+    legacy_project.mkdir()
+    legacy_secret = legacy_project / '.env.d-environment'
+    legacy_secret.write_text('POSTGRES_PASSWORD=keep-existing-credentials\n')
+    legacy_secret.chmod(0o600)
+    for _ in range(2):
+        configure.configure_project(legacy_project, 'code', 'postgres,redis')
+    assert legacy_secret.read_text() == 'POSTGRES_PASSWORD=keep-existing-credentials\n'
+    assert not (legacy_project / '.env.devready').exists()
+    assert (legacy_project / '.gitignore').read_text().count('/.env.d-environment') == 1
+    legacy_workspace = json.loads((legacy_project / 'development.code-workspace').read_text())
+    service_tasks = {task['label']: task for task in legacy_workspace['tasks']['tasks']}
+    assert service_tasks['Start dev services']['args'][:3] == ['compose', '--env-file', '.env.d-environment']
+    assert service_tasks['Stop dev services']['args'][:3] == ['compose', '--env-file', '.env.d-environment']
+
+    backed_up = root / 'backed-up.json'
+    backed_up.write_text('{"existing": 1}\n')
+    original_backup = root / 'backed-up.json.d-environment.bak'
+    original_backup.write_text('{"original": true}\n')
+    configure.write_json(backed_up, {'updated': 2})
+    assert original_backup.read_text() == '{"original": true}\n'
+    assert not (root / 'backed-up.json.devready.bak').exists()
+
+    path = root / ".cursor/mcp.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"mcpServers": {"existing": {"command": "keep-me"}}}))
-    configure.configure_mcp("copilot", "/path with spaces/laya", user_dir=root)
+    configure.configure_cursor_mcp("/path with spaces/laya", user_dir=root)
+    assert json.loads(path.with_name('mcp.json.devready.bak').read_text()) == {"mcpServers": {"existing": {"command": "keep-me"}}}
     result = json.loads(path.read_text())
     assert result["mcpServers"]["existing"]["command"] == "keep-me"
     assert result["mcpServers"]["laya-jev"]["command"] == "/path with spaces/laya"
-    assert result["mcpServers"]["laya-jev"]["tools"] == ["*"]
+    assert result["mcpServers"]["laya-jev"]["env"]["LAYA_PRELOAD"] == "0"
     before = path.read_bytes()
     modified = path.stat().st_mtime_ns
-    configure.configure_mcp("copilot", "/path with spaces/laya", user_dir=root)
+    configure.configure_cursor_mcp("/path with spaces/laya", user_dir=root)
     assert path.read_bytes() == before and path.stat().st_mtime_ns == modified
     path.write_text("invalid JSON")
     try:
-        configure.configure_mcp("copilot", "changed", user_dir=root)
+        configure.configure_cursor_mcp("changed", user_dir=root)
     except json.JSONDecodeError:
         pass
     else:
         raise AssertionError("Invalid existing configuration must not be overwritten")
     assert path.read_text() == "invalid JSON"
-    configure.configure_mcp("cursor", "/path/laya", user_dir=root)
-    assert json.loads((root / ".cursor/mcp.json").read_text())["mcpServers"]["laya-jev"]["env"]["LAYA_PRELOAD"] == "0"
 
 print("Project configuration, backups, secrets, MCP registration, and repeat-run checks passed.")

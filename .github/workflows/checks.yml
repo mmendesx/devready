@@ -1,4 +1,4 @@
-name: Installer checks
+name: DevReady checks
 
 on:
   push:
@@ -25,8 +25,11 @@ jobs:
           fi
       - name: Lint and smoke tests
         run: |
-          shellcheck -x setup-dev-environment.sh lib/*.sh test-setup-dev-environment.sh
-          bash test-setup-dev-environment.sh
+          shellcheck -x devready setup-dev-environment.sh lib/*.sh test-devready.sh tests/*.sh
+          bash test-devready.sh
+          python3 tests/check-state.py
+          python3 tests/check-docker.py
+          python3 tests/check-interactive.py
           python3 tests/check-config.py
       - name: Verify MCP protocol checks
         run: |
@@ -36,7 +39,7 @@ jobs:
       - name: Preview supported profiles
         run: |
           for profile in minimal backend frontend ai desktop headless; do
-            bash setup-dev-environment.sh --dry-run --profile "$profile"
+            ./devready --dry-run --profile "$profile"
           done
       - name: Validate Compose profiles
         if: runner.os == 'Linux'
@@ -45,3 +48,13 @@ jobs:
         run: |
           docker compose -f compose.dev.yaml --profile postgres config --quiet
           docker compose -f compose.dev.yaml --profile redis config --quiet
+
+  ubuntu-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build a clean Ubuntu test image
+        run: docker build --file tests/ubuntu.Dockerfile --tag devready-smoke .
+      - name: Install, build programs, check doctor, and repeat
+        run: docker run --rm devready-smoke

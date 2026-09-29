@@ -17,8 +17,9 @@ def write_json(path, data):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
-    backup = path.with_name(path.name + ".d-environment.bak")
-    if path.exists() and not backup.exists():
+    backup = path.with_name(path.name + ".devready.bak")
+    legacy_backup = path.with_name(path.name + ".d-environment.bak")
+    if path.exists() and not backup.exists() and not legacy_backup.exists():
         shutil.copy2(path, backup)
     with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as output:
         output.write(content)
@@ -37,22 +38,22 @@ def read_json(path):
     return data
 
 
-def configure_mcp(target, command, user_dir=None):
+def configure_cursor_mcp(command, user_dir=None):
     user_dir = user_dir or Path.home()
-    path = user_dir / (".copilot/mcp-config.json" if target == "copilot" else ".cursor/mcp.json")
+    path = user_dir / ".cursor/mcp.json"
     data = read_json(path)
     server = {"command": command, "args": [], "env": {"LAYA_PRELOAD": "0"}}
-    if target == "copilot":
-        server.update(type="local", tools=["*"])
     data.setdefault("mcpServers", {})["laya-jev"] = server
     write_json(path, data)
 
 
-def configure_project(project, editor, services):
+def configure_project(project, editor, services, components=""):
     package = read_json(project / "package.json")
     javascript = (project / "package.json").exists()
     python = (project / "pyproject.toml").exists()
     java = any((project / file).exists() for file in ("pom.xml", "build.gradle", "build.gradle.kts"))
+    go = (project / "go.mod").exists()
+    native_languages = set(components.split(",")) & {"c", "cpp"}
     settings = {
         "editor.fontFamily": "'JetBrainsMono Nerd Font Mono', monospace",
         "terminal.integrated.fontFamily": "JetBrainsMono Nerd Font Mono",
@@ -105,20 +106,43 @@ def configure_project(project, editor, services):
         tasks.append({"label": "Java tests", "type": "process", "command": wrapper, "args": ["test"], "group": "test"})
         configurations.append({"name": "Debug Java file", "type": "java", "request": "launch", "mainClass": "${file}"})
 
+    if go:
+        extensions.append("golang.go")
+        settings["[go]"] = {"editor.defaultFormatter": "golang.go"}
+        tasks += [
+            {"label": "Go tests", "type": "process", "command": "go", "args": ["test", "./..."], "group": "test"},
+            {"label": "Go vet", "type": "process", "command": "go", "args": ["vet", "./..."]},
+        ]
+    if native_languages:
+        extensions.append("llvm-vs-code-extensions.vscode-clangd")
+        for language in sorted(native_languages):
+            settings[f"[{language}]"] = {"editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"}
+        if (project / "CMakeLists.txt").exists():
+            extensions.append("ms-vscode.cmake-tools")
+            settings["cmake.configureSettings"] = {"CMAKE_EXPORT_COMPILE_COMMANDS": True}
+            tasks += [
+                {"label": "CMake configure", "type": "process", "command": "cmake",
+                 "args": ["-S", ".", "-B", "build", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"]},
+                {"label": "CMake build", "type": "process", "command": "cmake", "args": ["--build", "build"], "group": "build"},
+            ]
+
     if services:
         compose = project / "compose.dev.yaml"
         if not compose.exists():
             shutil.copyfile(Path(__file__).resolve().parents[1] / "compose.dev.yaml", compose)
+        env_file = project / ".env.devready"
+        # Keep existing credentials and workspace tasks using the same file.
+        if (project / ".env.d-environment").exists():
+            env_file = project / ".env.d-environment"
         ignore = project / ".gitignore"
         ignored = ignore.read_text() if ignore.exists() else ""
-        if "/.env.d-environment" not in ignored.splitlines():
+        if f"/{env_file.name}" not in ignored.splitlines():
             with ignore.open("a") as output:
-                output.write("\n/.env.d-environment\n")
-        env_file = project / ".env.d-environment"
+                output.write(f"\n/{env_file.name}\n")
         if not env_file.exists():
             with open(env_file, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as output:
                 output.write(f"POSTGRES_USER=dev\nPOSTGRES_DB=app\nPOSTGRES_PASSWORD={secrets.token_urlsafe(24)}\n")
-        command = ["compose", "--env-file", ".env.d-environment", "-f", "compose.dev.yaml"]
+        command = ["compose", "--env-file", env_file.name, "-f", "compose.dev.yaml"]
         for service in services.split(","):
             command += ["--profile", service]
         tasks.append({"label": "Start dev services", "type": "process", "command": "docker", "args": command + ["up", "-d", "--wait"]})
@@ -154,17 +178,18 @@ def main():
     parser.add_argument("--project", type=Path)
     parser.add_argument("--editor", choices=("none", "code", "cursor"), default="none")
     parser.add_argument("--services", default="")
-    parser.add_argument("--mcp-target", choices=("copilot", "cursor"))
+    parser.add_argument("--components", default="")
+    parser.add_argument("--mcp-target", choices=("cursor",))
     parser.add_argument("--mcp-command")
     args = parser.parse_args()
     if args.mcp_target:
         if not args.mcp_command:
             parser.error("--mcp-command is required")
-        configure_mcp(args.mcp_target, args.mcp_command)
+        configure_cursor_mcp(args.mcp_command)
     elif args.project and args.project.is_dir():
         if any(service not in ("postgres", "redis") for service in args.services.split(",") if service):
             parser.error("Unknown service")
-        configure_project(args.project.resolve(), args.editor, args.services)
+        configure_project(args.project.resolve(), args.editor, args.services, args.components)
     else:
         parser.error("An existing --project directory is required")
 
