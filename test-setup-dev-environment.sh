@@ -73,6 +73,14 @@ ensure_pnpm
 [[ "$(command -v pnpm)" == "${PNPM_HOME}/bin/pnpm" ]]
 [[ ":${PATH}:" == *":${PNPM_HOME}:"* ]]
 [[ "$(grep -c 'curl .*get.pnpm.io/install.sh' "${SETUP_TEST_LOG}")" == 1 ]]
+(
+  unset PNPM_HOME
+  OS=Darwin
+  pnpm() { :; }
+  ensure_pnpm
+  [[ "${PNPM_HOME}" == "${HOME}/Library/pnpm" ]] || { printf 'macOS must use the native pnpm home.\n' >&2; exit 1; }
+  [[ ":${PATH}:" == *":${PNPM_HOME}/bin:"* ]] || exit 1
+)
 install_pnpm_global_if_missing missing-test-command typescript
 install_pnpm_global_if_missing sh should-not-install
 COMPONENTS=codex EDITOR=none

@@ -173,7 +173,7 @@ ensure_java() {
   JAVA_HOME="$(mise where "java@${JAVA_VERSION}")"
   export PATH="${JAVA_HOME}/bin:${PATH}"
   if [[ "${PKG_MANAGER}" == brew ]]; then
-    install_system_pkg springboot
+    install_system_pkg spring-io/tap/spring-boot
   fi
 }
 
@@ -199,7 +199,9 @@ ensure_node() {
 }
 
 ensure_pnpm() {
-  export PNPM_HOME="${PNPM_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/pnpm}"
+  local pnpm_home="${XDG_DATA_HOME:-$HOME/.local/share}/pnpm"
+  if [[ "${OS}" == Darwin ]]; then pnpm_home="${HOME}/Library/pnpm"; fi
+  export PNPM_HOME="${PNPM_HOME:-${pnpm_home}}"
   export PATH="${PNPM_HOME}/bin:${PNPM_HOME}:${PATH}"
   if ! command -v pnpm >/dev/null 2>&1; then
     curl -fsSL https://get.pnpm.io/install.sh | env SHELL="${SHELL:-/bin/bash}" sh -
