@@ -93,7 +93,12 @@ read_installed_state() {
     key="${line%%=*}" encoded="${line#*=}"
     [[ "${seen}" != *"|${key}|"* ]] || return 1
     seen="${seen}${key}|"
-    printf -v value '%b' "${encoded}"
+    # Bash 3.2 can reuse printf's previous output for an empty %b argument.
+    if [[ -z "${encoded}" ]]; then
+      value=''
+    else
+      printf -v value '%b' "${encoded}"
+    fi
     [[ "$(state_escape "${value}")" == "${encoded}" ]] || return 1
     case "${key}" in
       FORMAT) format="${value}" ;;

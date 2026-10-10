@@ -72,6 +72,7 @@ parse_args --doctor
 [[ "$COMPONENTS" == go,c,cpp,codex,node && "$NODE_TOOLING" == false ]]
 [[ "$GO_VERSION" == 1.27.1 && "$NODE_MAJOR_VERSION" == 22.22.3 ]]
 [[ "$HEADLESS" == true && "$DOCTOR_AUTH" == false ]]
+[[ -z "$PROJECT_DIR" && -z "$SERVICES" && -z "$JAVA_VERSION" && -z "$PYTHON_VERSION" ]]
 parse_args --doctor --components claude
 [[ "$COMPONENTS" == claude ]]
 ''')
@@ -118,7 +119,7 @@ parse_args --doctor
     del env['D_ENV_BIN_DIR'], env['DEVREADY_BIN_DIR']
 
     # Paths and shell metacharacters remain literal, including newlines/backslashes.
-    project = root / 'literal $(touch INJECTED) `touch INJECTED` \\ project\nnext'
+    project = root / 'literal $(touch INJECTED) `touch INJECTED` \\ project\nnext\n'
     project.mkdir()
     env["TEST_PROJECT"] = str(project)
     run(provision + r'''
