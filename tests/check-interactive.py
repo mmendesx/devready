@@ -52,7 +52,11 @@ def choose(keys, args=(), rows=24, columns=80):
         receive_until(lambda: process.poll() is not None)
         while select.select([master], [], [], 0)[0]:
             output.extend(os.read(master, 65536))
-        assert termios.tcgetattr(terminal) == original, "The checklist changed terminal settings."
+        restored = termios.tcgetattr(terminal)
+        # macOS sets PENDIN when canonical mode is restored without flushing input.
+        for settings in (original, restored):
+            settings[3] &= ~getattr(termios, "PENDIN", 0)
+        assert restored == original, f"The checklist changed terminal settings: {original!r} -> {restored!r}"
         return process.returncode, output.decode(errors="replace")
     finally:
         if process.poll() is None:
