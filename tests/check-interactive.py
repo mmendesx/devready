@@ -80,9 +80,7 @@ output = expect(b"\x1b[B" * 11 + b" \n", "codex,node")
 assert "Node development tools: false" in output
 output = expect(b"\n \n", "java")
 assert "Select at least one tool" in output
-output = expect(b"\x1b[B" * 14 + b" \n" + b"\x1b[A" * 3 + b" \n",
-                "codex,superpowers,node")
-assert "Skills need Codex or Claude Code" in output
+expect(b"\x1b[B" * 14 + b" \n", "superpowers,node")
 output = expect(b"a\n", "java,python,node,go,c,cpp,docker,tools,lsp,shell,codex,claude,laya,superpowers,ponytail,ui-taste",
                 args=("--headless",))
 assert "Headless: true" in output
@@ -99,4 +97,5 @@ for key in (b"q", b"\x1b", b"\x1b\n", b"\x04"):
 output = expect(None, "fonts", args=("--components", "fonts", "--yes"))
 assert "Space" not in output
 expect(None, "tools", args=("--profile", "minimal", "--dry-run"))
+expect(None, "ponytail,node", args=("--components", "ponytail", "--yes"))
 print("Interactive checklist selection, navigation, cancellation, dependencies, and terminal restoration passed.")

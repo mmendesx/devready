@@ -23,6 +23,8 @@ Usage: ./devready [options]
 
 Without options: select tools directly with arrows and Space. All tools
 start unchecked. Enter continues; q or Esc cancels before installation.
+Skills without a selected agent/editor target supported AI coding CLIs
+already on PATH. If none are found, skills are installed in ~/.agents/skills.
 
 Runtime overrides: JAVA_VERSION=25 PYTHON_VERSION=3.13 NODE_MAJOR_VERSION=22
                    GO_VERSION=1.27
@@ -48,13 +50,6 @@ profile_components() {
     full|desktop|headless) printf 'java,python,node,go,c,cpp,docker,tools,lsp,shell,fonts,codex,claude,laya,superpowers,ponytail,ui-taste' ;;
     *) err "Unknown profile: $1"; return 1 ;;
   esac
-}
-
-skills_have_destination() {
-  local COMPONENTS="$1"
-  if selected superpowers || selected ponytail || selected ui-taste; then
-    selected codex || selected claude || [[ "${EDITOR}" != none ]]
-  fi
 }
 
 choose_components() {
@@ -144,8 +139,6 @@ choose_components() {
       ''|$'\r')
         if [[ -z "${result}" ]]; then
           message='Select at least one tool, or press q to cancel.'
-        elif ! skills_have_destination "${result}"; then
-          message='Skills need Codex or Claude Code as a destination.'
         else
           printf '%s\n' "${result}"
           return 0
@@ -246,9 +239,6 @@ parse_args() {
   if [[ -n "${PROJECT_DIR}" && -f "${PROJECT_DIR}/package.json" ]]; then add_component node; NODE_TOOLING=true; fi
   if [[ -n "${PROJECT_DIR}" && -f "${PROJECT_DIR}/go.mod" ]]; then add_component go; fi
   if [[ -n "${PROJECT_DIR}" ]] && { [[ -f "${PROJECT_DIR}/pom.xml" ]] || [[ -f "${PROJECT_DIR}/build.gradle" ]] || [[ -f "${PROJECT_DIR}/build.gradle.kts" ]]; }; then add_component java; fi
-  if ! skills_have_destination "${COMPONENTS}"; then
-    err "Select codex, claude, or an editor as the destination for skills."; return 1
-  fi
 }
 
 show_selection() {

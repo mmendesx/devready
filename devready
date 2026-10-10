@@ -376,8 +376,35 @@ install_skill_if_missing() {
   if selected claude; then agents+=(claude-code); fi
   if [[ "${EDITOR}" == cursor ]]; then agents+=(cursor); fi
   if [[ "${EDITOR}" == code ]]; then agents+=(github-copilot); fi
+  if [[ "${#agents[@]}" == 0 ]]; then
+    if command -v codex >/dev/null 2>&1; then agents+=(codex); fi
+    if command -v claude >/dev/null 2>&1; then agents+=(claude-code); fi
+    if command -v copilot >/dev/null 2>&1; then agents+=(github-copilot); fi
+    if command -v cursor-agent >/dev/null 2>&1 || command -v cursor >/dev/null 2>&1; then agents+=(cursor); fi
+    if command -v gemini >/dev/null 2>&1; then agents+=(gemini-cli); fi
+    if command -v opencode >/dev/null 2>&1; then agents+=(opencode); fi
+    if [[ "${#agents[@]}" == 0 ]]; then
+      agents+=(universal)
+      log "No supported AI coding CLI found on PATH; installing skills in ${HOME}/.agents/skills."
+    else
+      log "Detected skill destinations: ${agents[*]}"
+    fi
+  fi
   for agent in "${agents[@]}"; do
-    if ! pnpm dlx skills list --global --agent "${agent}" 2>/dev/null | grep -Ei "${match_pattern}" >/dev/null; then
+    # The CLI also lists shared skills that are not linked to the requested agent.
+    if ! pnpm dlx skills list --global --agent "${agent}" --json 2>/dev/null | node -e '
+      const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
+      const agent = process.argv[1];
+      const names = { codex: "Codex", "claude-code": "Claude Code", cursor: "Cursor",
+        "github-copilot": "GitHub Copilot", "gemini-cli": "Gemini CLI", opencode: "OpenCode" };
+      const shared = path.join(os.homedir(), ".agents", "skills") + path.sep;
+      for (const skill of JSON.parse(fs.readFileSync(0, "utf8"))) {
+        if ((agent !== "universal" && skill.agents?.includes(names[agent])) ||
+            (agent !== "claude-code" && skill.path?.startsWith(shared))) {
+          console.log([skill.name, skill.source, skill.sourceUrl].filter(Boolean).join(" "));
+        }
+      }
+    ' "${agent}" | grep -Ei "${match_pattern}" >/dev/null; then
       pnpm dlx skills add "${skill_ref}" --global --agent "${agent}" --skill '*' --yes
     fi
   done
@@ -600,6 +627,8 @@ ensure_laya_jev_middleware() {
   if selected codex; then
     backup_file "${HOME}/.codex/config.toml"
     codex mcp add laya-jev -- "${laya_bin_dir}/laya-jev-mcp"
+    python3 "${REPO_ROOT}/scripts/configure-project.py" \
+      --jev-instructions "${CODEX_HOME:-$HOME/.codex}/AGENTS.md"
   fi
   if selected claude; then
     backup_file "${HOME}/.claude.json"
@@ -613,6 +642,8 @@ ensure_laya_jev_middleware() {
     else
       claude mcp add --scope user laya-jev -- "${laya_bin_dir}/laya-jev-mcp"
     fi
+    python3 "${REPO_ROOT}/scripts/configure-project.py" \
+      --jev-instructions "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md"
   fi
   if [[ "${EDITOR}" == cursor ]]; then
     python3 "${REPO_ROOT}/scripts/configure-project.py" --mcp-target cursor \

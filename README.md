@@ -126,9 +126,34 @@ On Linux, `fc-match` can report the requested family while selecting an unrelate
 
 ## AI tools and Laya MCP
 
-The available CLI agents are **Codex** and **Claude Code**. Codex uses pnpm; Claude Code uses its native installer. Skills are installed for selected Codex/Claude/editor destinations using the skills CLI; choose a destination when selecting a skills component.
+The CLI agents available for installation are **Codex** and **Claude Code**. Codex uses pnpm; Claude Code uses its native installer. Skills are installed for selected Codex/Claude/editor destinations using the [skills CLI](https://github.com/vercel-labs/skills).
+
+When skills are selected without an explicit agent or editor destination, setup detects existing commands on `PATH`: `codex`, `claude`, `copilot`, `cursor-agent` or `cursor`, `gemini`, and `opencode`. It installs the selected skills for each detected assistant and skips missing ones. It does not install the unselected assistants. If none are found, it installs the skills in `~/.agents/skills` using the skills CLI's universal destination. Explicit destinations take precedence over detection, and existing skills are reused.
+
+```bash
+# Add skills to supported AI tools already installed on this machine.
+./devready --components superpowers,ponytail,ui-taste --headless --yes
+```
 
 [Laya](https://github.com/NandhaKishorM/laya) runs in its own uv virtual environment. Setup creates `~/.laya-jev/bin/laya-jev-mcp` and `laya-jev-serve`, then validates an actual MCP initialization and tool discovery before registering `laya-jev` in the selected Codex, Claude, Cursor, or VS Code clients.
+
+Selecting `laya` also installs a [mandatory JEV decision-helper policy](instructions/jev.md). Assistants must consult JEV before supported structured decisions: choosing between concrete alternatives, classification/routing, ordinal scoring, or boolean assessments. They must check confidence and verify recommendations against the task and code. If JEV is unavailable, they must report the limitation and identify decisions made without it.
+
+| Destination | Instruction files |
+| --- | --- |
+| Selected [Codex](https://developers.openai.com/codex/guides/agents-md) CLI | `${CODEX_HOME:-~/.codex}/AGENTS.md` |
+| Selected [Claude Code](https://code.claude.com/docs/en/memory) CLI | `${CLAUDE_CONFIG_DIR:-~/.claude}/CLAUDE.md` |
+| Any `--project` with `laya` selected | `AGENTS.md`, `CLAUDE.md`, and `.github/copilot-instructions.md` |
+
+Project files cover Codex, Claude Code, [Cursor](https://cursor.com/docs/rules), [GitHub Copilot](https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/configure-custom-instructions/add-repository-instructions-in-your-ide), and other assistants that read `AGENTS.md`. Setup adds or updates only its marked policy block, preserves existing guidance and file permissions, and backs up changed files once. Existing `AGENTS.override.md` files at the destination also receive the policy so Codex's override takes effect with the same requirement. Repeated runs leave unchanged instruction files untouched. Runs without `laya` do not add or remove this policy.
+
+Use `--project` to share the policy with project assistants, even without an editor:
+
+```bash
+./devready --components codex,claude,laya --project /path/to/app --headless --yes
+```
+
+Instruction files guide assistant behavior; clients must load them and provide access to the JEV MCP tools. MCP registration still targets the selected clients, so connect JEV separately in any additional assistant that uses the project.
 
 The check disables model downloads and uses `LAYA_PRELOAD=0`. Normal MCP calls may download models when needed. Laya is exposed as MCP tools; provider requests are not automatically routed through it. Sign in to the selected AI tools and run `gh auth login` yourself.
 

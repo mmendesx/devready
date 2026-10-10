@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Stub commands are called indirectly by the sourced installer and doctor.
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 set -euo pipefail
 
+test_node="$(node -p 'process.execPath')"
 source "$(dirname "${BASH_SOURCE[0]}")/devready"
 
 test_dir="$(mktemp -d)"
@@ -14,9 +15,12 @@ mkdir -p "${test_dir}/bin" "${TMPDIR}" "${test_dir}/configuration"
 for tool in cat chmod cp dirname env grep mkdir mktemp rm sh cmp awk uname ln; do
   ln -s "$(command -v "${tool}")" "${test_dir}/bin/${tool}"
 done
+ln -s "$test_node" "${test_dir}/bin/node"
 export PATH="${test_dir}/bin"
 CONFIG_DIR="${test_dir}/configuration"
 LOCAL_BIN="${test_dir}/bin"
+LAYA_VENV_DIR="${test_dir}/laya/.venv"
+LAYA_CONFIG_DIR="${test_dir}/laya/config"
 unset SSH_CONNECTION SSH_TTY
 
 record() { printf '%s\n' "$*" >> "${SETUP_TEST_LOG}"; }
@@ -37,6 +41,7 @@ EOF
 cat > "${test_dir}/pnpm-stub" <<'EOF'
 #!/bin/sh
 printf 'pnpm %s\n' "$*" >> "$SETUP_TEST_LOG"
+if [ "$3" = list ]; then printf '[]\n'; fi
 EOF
 
 parse_args --dry-run --components go,c,cpp
@@ -149,10 +154,121 @@ install_pnpm_global_if_missing sh should-not-install
 COMPONENTS=codex EDITOR=none
 install_skill_if_missing https://uizze.sh/ uizze
 grep -qx 'pnpm add --global typescript' "${SETUP_TEST_LOG}"
-grep -qx 'pnpm dlx skills list --global --agent codex' "${SETUP_TEST_LOG}"
+grep -qx 'pnpm dlx skills list --global --agent codex --json' "${SETUP_TEST_LOG}"
 grep -Fqx 'pnpm dlx skills add https://uizze.sh/ --global --agent codex --skill * --yes' "${SETUP_TEST_LOG}"
 grep -q 'should-not-install' "${SETUP_TEST_LOG}" && exit 1
 grep -Eq '(^|[^[:alnum:]_])(npm|npx)([^[:alnum:]_]|$)' "${REPO_ROOT}/devready" && exit 1
+
+# Skills-only selections target installed assistants, or the shared skills directory.
+(
+  parse_args --components superpowers,ponytail,ui-taste --yes
+  [[ "$COMPONENTS" == superpowers,ponytail,ui-taste,node && "$EDITOR" == none ]]
+  : > "${SETUP_TEST_LOG}"
+  install_skill_if_missing https://uizze.sh/ uizze
+  grep -Fqx 'pnpm dlx skills list --global --agent universal --json' "${SETUP_TEST_LOG}"
+  grep -Fqx 'pnpm dlx skills add https://uizze.sh/ --global --agent universal --skill * --yes' "${SETUP_TEST_LOG}"
+  [[ "$(grep -c '^pnpm ' "${SETUP_TEST_LOG}")" == 2 ]]
+  (
+    pnpm() {
+      record "pnpm $*"
+      printf '[{"name":"uizze","path":"%s/.agents/skills/uizze","agents":[]}]\n' "$HOME"
+    }
+    : > "${SETUP_TEST_LOG}"
+    install_skill_if_missing https://uizze.sh/ uizze
+    grep -Fqx 'pnpm dlx skills list --global --agent universal --json' "${SETUP_TEST_LOG}"
+    [[ "$(grep -c '^pnpm ' "${SETUP_TEST_LOG}")" == 1 ]]
+  )
+  (
+    pnpm() {
+      record "pnpm $*"
+      if [[ "$3" == list ]]; then
+        printf '[{"name":"uizze","path":"%s/agents/skills/uizze","agents":["Universal"]}]\n' "$XDG_CONFIG_HOME"
+      fi
+    }
+    : > "${SETUP_TEST_LOG}"
+    install_skill_if_missing https://uizze.sh/ uizze
+    grep -Fqx 'pnpm dlx skills add https://uizze.sh/ --global --agent universal --skill * --yes' "${SETUP_TEST_LOG}"
+  )
+
+  for pair in codex:codex claude:claude-code copilot:github-copilot cursor-agent:cursor cursor:cursor gemini:gemini-cli opencode:opencode; do
+    binary="${test_dir}/bin/${pair%%:*}"
+    printf '#!/bin/sh\nexit 0\n' > "$binary"
+    chmod +x "$binary"
+    : > "${SETUP_TEST_LOG}"
+    install_skill_if_missing https://uizze.sh/ uizze
+    grep -Fqx "pnpm dlx skills list --global --agent ${pair#*:} --json" "${SETUP_TEST_LOG}"
+    grep -Fqx "pnpm dlx skills add https://uizze.sh/ --global --agent ${pair#*:} --skill * --yes" "${SETUP_TEST_LOG}"
+    [[ "$(grep -c '^pnpm ' "${SETUP_TEST_LOG}")" == 2 ]]
+    rm "$binary"
+  done
+
+  # Several detected assistants receive skills; Cursor aliases share one destination.
+  codex() { :; }
+  claude() { :; }
+  cursor() { :; }
+  cursor-agent() { :; }
+  : > "${SETUP_TEST_LOG}"
+  install_skill_if_missing https://uizze.sh/ uizze
+  [[ "$(grep -c '^pnpm dlx skills add ' "${SETUP_TEST_LOG}")" == 3 ]]
+
+  # Explicit destinations take precedence over other installed assistants.
+  parse_args --components codex,ui-taste --yes
+  : > "${SETUP_TEST_LOG}"
+  install_skill_if_missing https://uizze.sh/ uizze
+  grep -Fqx 'pnpm dlx skills add https://uizze.sh/ --global --agent codex --skill * --yes' "${SETUP_TEST_LOG}"
+  [[ "$(grep -c '^pnpm dlx skills add ' "${SETUP_TEST_LOG}")" == 1 ]]
+
+  # Canonical skills must not suppress the separate links Claude needs.
+  (
+    parse_args --components codex,claude,ui-taste --yes
+    pnpm() {
+      record "pnpm $*"
+      if [[ "$3" == list ]]; then
+        printf '[{"name":"uizze","path":"%s/.agents/skills/uizze","agents":["Codex"],"source":"uizze"}]\n' "$HOME"
+      fi
+    }
+    : > "${SETUP_TEST_LOG}"
+    install_skill_if_missing https://uizze.sh/ uizze
+    grep -Fqx 'pnpm dlx skills add https://uizze.sh/ --global --agent claude-code --skill * --yes' "${SETUP_TEST_LOG}"
+    [[ "$(grep -c '^pnpm dlx skills add ' "${SETUP_TEST_LOG}")" == 1 ]]
+  )
+
+  # Detection still respects skills that are already installed.
+  parse_args --components ui-taste --yes
+  pnpm() {
+    record "pnpm $*"
+    printf '[{"name":"uizze","path":"%s/.agents/skills/uizze","agents":["Codex","Claude Code","Cursor"]}]\n' "$HOME"
+  }
+  : > "${SETUP_TEST_LOG}"
+  install_skill_if_missing https://uizze.sh/ uizze
+  [[ "$(grep -c '^pnpm dlx skills list ' "${SETUP_TEST_LOG}")" == 3 ]]
+  if grep -q '^pnpm dlx skills add ' "${SETUP_TEST_LOG}"; then exit 1; fi
+)
+
+# Laya provisioning installs global guidance only for the selected CLI clients.
+(
+  mkdir -p "${LAYA_VENV_DIR}/bin"
+  for tool in python laya-mcp-server laya-serve; do
+    printf '#!/bin/sh\nexit 0\n' > "${LAYA_VENV_DIR}/bin/${tool}"
+    chmod +x "${LAYA_VENV_DIR}/bin/${tool}"
+  done
+  backup_file() { :; }
+  codex() { record "codex $*"; }
+  claude() { [[ "$*" != 'mcp get laya-jev' ]] || return 1; record "claude $*"; }
+  python3() { record "python3 $*"; }
+  for selection in laya laya,codex laya,claude; do
+    : > "${SETUP_TEST_LOG}"
+    parse_args --components "${selection}" --headless --yes
+    ensure_laya_jev_middleware
+    if selected codex; then
+      grep -Fqx "python3 ${REPO_ROOT}/scripts/configure-project.py --jev-instructions ${CODEX_HOME:-$HOME/.codex}/AGENTS.md" "${SETUP_TEST_LOG}"
+    elif selected claude; then
+      grep -Fqx "python3 ${REPO_ROOT}/scripts/configure-project.py --jev-instructions ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md" "${SETUP_TEST_LOG}"
+    else
+      [[ ! -s "${SETUP_TEST_LOG}" ]]
+    fi
+  done
+)
 
 # Language servers use the selected languages and reuse existing installations.
 for manager in apt dnf yum pacman brew; do

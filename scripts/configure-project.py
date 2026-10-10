@@ -11,8 +11,7 @@ import subprocess
 import tempfile
 
 
-def write_json(path, data):
-    content = json.dumps(data, indent=2) + "\n"
+def write_text(path, content):
     if path.exists() and path.read_text() == content:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -29,6 +28,36 @@ def write_json(path, data):
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def write_json(path, data):
+    write_text(path, json.dumps(data, indent=2) + "\n")
+
+
+def configure_jev_instructions(path):
+    paths = [path]
+    override = path.with_name("AGENTS.override.md")
+    if path.name == "AGENTS.md" and override.is_file():
+        paths.append(override)
+    policy = (Path(__file__).resolve().parents[1] / "instructions/jev.md").read_text().strip()
+    start, end = "<!-- devready:jev:start -->", "<!-- devready:jev:end -->"
+    block = f"{start}\n{policy}\n{end}"
+    for target in paths:
+        # Preserve shared instruction files linked by multiple assistants.
+        target = target.resolve()
+        content = target.read_text() if target.exists() else ""
+        if start in content or end in content:
+            if content.count(start) != 1 or content.count(end) != 1 or content.index(start) > content.index(end):
+                raise ValueError(f"Malformed devready JEV instruction block in {target}")
+            before, _, remaining = content.partition(start)
+            _, _, after = remaining.partition(end)
+            updated = before + block + after
+        else:
+            updated = content
+            if content and not content.endswith("\n\n"):
+                updated += "\n" if content.endswith("\n") else "\n\n"
+            updated += block + "\n"
+        write_text(target, updated)
 
 
 def read_json(path):
@@ -48,6 +77,9 @@ def configure_cursor_mcp(command, user_dir=None):
 
 
 def configure_project(project, editor, services, components=""):
+    if "laya" in components.split(","):
+        for name in ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"):
+            configure_jev_instructions(project / name)
     package = read_json(project / "package.json")
     javascript = (project / "package.json").exists()
     python = (project / "pyproject.toml").exists()
@@ -181,11 +213,14 @@ def main():
     parser.add_argument("--components", default="")
     parser.add_argument("--mcp-target", choices=("cursor",))
     parser.add_argument("--mcp-command")
+    parser.add_argument("--jev-instructions", type=Path)
     args = parser.parse_args()
     if args.mcp_target:
         if not args.mcp_command:
             parser.error("--mcp-command is required")
         configure_cursor_mcp(args.mcp_command)
+    elif args.jev_instructions:
+        configure_jev_instructions(args.jev_instructions)
     elif args.project and args.project.is_dir():
         if any(service not in ("postgres", "redis") for service in args.services.split(",") if service):
             parser.error("Unknown service")

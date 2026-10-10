@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -28,6 +29,67 @@ with tempfile.TemporaryDirectory() as directory:
         launcher.write_text("#!/bin/sh\nexit 0\n")
         launcher.chmod(0o755)
     os.environ["PATH"] = str(binary) + os.pathsep + os.environ["PATH"]
+
+    # Selecting Laya distributes the same policy without losing existing guidance.
+    instructions = root / "instruction project"
+    instructions.mkdir()
+    configure.configure_project(instructions, "none", "", "tools")
+    assert not list(instructions.iterdir())
+    agents = instructions / "AGENTS.md"
+    agents.write_text("Keep the project's existing instructions.")
+    agents.chmod(0o640)
+    override = instructions / "AGENTS.override.md"
+    override.write_text("Keep the active Codex override.\n")
+    configure.configure_project(instructions, "none", "", "laya")
+    instruction_paths = [instructions / name for name in (
+        "AGENTS.md", "AGENTS.override.md", "CLAUDE.md", ".github/copilot-instructions.md",
+    )]
+    assert all(path.is_file() for path in instruction_paths), "Laya must install instructions for every project assistant"
+    policy = (Path(__file__).resolve().parents[1] / "instructions/jev.md").read_text().strip()
+    assert all(policy in path.read_text() for path in instruction_paths)
+    assert agents.read_text().startswith("Keep the project's existing instructions.\n\n")
+    assert override.read_text().startswith("Keep the active Codex override.\n")
+    assert stat.S_IMODE(agents.stat().st_mode) == 0o640
+    backup = agents.with_name("AGENTS.md.devready.bak")
+    assert backup.read_text() == "Keep the project's existing instructions."
+    snapshots = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in instruction_paths}
+    configure.configure_project(instructions, "none", "", "laya")
+    assert snapshots == {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in instruction_paths}
+
+    # Reruns upgrade only the managed block, preserving content on either side.
+    agents.write_text(agents.read_text().replace(policy, "Old policy") + "\nKeep trailing guidance.\n")
+    configure.configure_project(instructions, "none", "", "laya")
+    assert policy in agents.read_text() and "Old policy" not in agents.read_text()
+    assert agents.read_text().endswith("\nKeep trailing guidance.\n")
+    assert backup.read_text() == "Keep the project's existing instructions."
+
+    # A broken managed block must never consume unrelated instructions.
+    for content in (
+        "<!-- devready:jev:start -->\nKeep me.\n",
+        "<!-- devready:jev:end -->\nKeep me.\n",
+        "<!-- devready:jev:end --><!-- devready:jev:start -->",
+        agents.read_text() + agents.read_text(),
+    ):
+        agents.write_text(content)
+        try:
+            configure.configure_project(instructions, "none", "", "laya")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Malformed managed instructions must fail without overwriting the file")
+        assert agents.read_text() == content
+
+    # The standalone CLI also installs global instructions without project setup.
+    for name in ("codex/AGENTS.md", "claude/CLAUDE.md"):
+        target = root / "client instructions" / name
+        subprocess.run([sys.executable, str(Path(configure.__file__)), "--jev-instructions", str(target)], check=True)
+        assert policy in target.read_text()
+    linked = root / "linked instructions.md"
+    linked.symlink_to(target)
+    target.write_text("Keep linked guidance.\n")
+    configure.configure_jev_instructions(linked)
+    assert linked.is_symlink() and policy in target.read_text()
+    assert target.read_text().startswith("Keep linked guidance.\n")
 
     native = root / "native project"
     native.mkdir()
